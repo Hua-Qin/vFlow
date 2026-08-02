@@ -131,10 +131,7 @@ jobs:
           # Encryption key is OPTIONAL; only applied when the repo has the secret set.
           # Without it, gradle-home cache falls back to action-default encryption (per-repo).
           cache-encryption-key: ${{ secrets.GRADLE_CACHE_ENCRYPTION_KEY || '' }}
-          cache-read-only: false
           gradle-home-cache-cleanup: true
-          # Save even on build failure (incremental compiles are still valuable for next run)
-          cache-write-only: false
 
       # (6) CMake / Ninja outputs per module (~vflow_shell_exec native .so).
       #     Keyed on C++ sources + CMakeLists so code changes invalidate cleanly.
