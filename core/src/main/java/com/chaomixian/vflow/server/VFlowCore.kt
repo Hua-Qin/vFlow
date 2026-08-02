@@ -146,15 +146,41 @@ object VFlowCore {
         // 1. 启动 Shell Worker
         try {
             val shellWorkerArgs = buildWorkerTransportArgs(Config.WorkerType.SHELL)
-            val p = if (shellLauncherPath != null) {
-                SystemUtils.startWorkerProcess("shell", shellLauncherPath, shellWorkerArgs)
+            var shellProcess: Process? = null
+            var usedShellLauncher = false
+            if (shellLauncherPath != null) {
+                // 优先用 vflow_shell_exec（降权 + SELinux 切换），但如果它因为 setuid 失败
+                // 或其他原因瞬时退出（< 1500ms），立即回退到直接启动 + Kotlin 层 dropPrivilegesToShell()。
+                try {
+                    val p = SystemUtils.startWorkerProcess("shell", shellLauncherPath, shellWorkerArgs)
+                    usedShellLauncher = true
+                    // waitFor(timeout)=true 表示进程在 1500ms 内已退出，说明启动瞬时失败。
+                    val exitedFast = try {
+                        p.waitFor(1500, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    } catch (_: InterruptedException) { false }
+                    if (exitedFast) {
+                        val exitCode = try { p.exitValue() } catch (_: IllegalThreadStateException) { -65536 }
+                        System.err.println("⚠️ ShellWorker via vflow_shell_exec exited almost immediately (exit=$exitCode); " +
+                                "falling back to direct launch with dropPrivilegesToShell().")
+                        try { p.destroy() } catch (_: Exception) {}
+                        // 回退：直接启动 app_process，让 ShellWorker 内部 dropPrivilegesToShell() 执行降权。
+                        shellProcess = SystemUtils.startWorkerProcess("shell", shellWorkerArgs)
+                    } else {
+                        shellProcess = p
+                    }
+                } catch (e: Exception) {
+                    System.err.println("⚠️ Failed to start ShellWorker via vflow_shell_exec (${e.message}); " +
+                            "falling back to direct launch with dropPrivilegesToShell().")
+                    shellProcess = SystemUtils.startWorkerProcess("shell", shellWorkerArgs)
+                }
             } else {
-                SystemUtils.startWorkerProcess("shell", shellWorkerArgs)
+                shellProcess = SystemUtils.startWorkerProcess("shell", shellWorkerArgs)
             }
-            workerProcesses.add(p)
-            setupWorkerLogger(p, "ShellWorker")
+            workerProcesses.add(shellProcess)
+            setupWorkerLogger(shellProcess, if (usedShellLauncher) "ShellWorker" else "ShellWorker(direct)")
         } catch (e: Exception) {
             System.err.println("❌ Failed to start ShellWorker: ${e.message}")
+            e.printStackTrace()
         }
 
         // 2. 启动 Root Worker (仅 Master 为 Root 时，保持原样，不需要 vflow_shell_exec)

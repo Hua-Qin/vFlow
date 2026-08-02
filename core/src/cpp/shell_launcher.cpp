@@ -201,12 +201,17 @@ int main(int argc, char *argv[]) {
     uid_t final_uid = getuid();
     gid_t final_gid = getgid();
     if (final_uid != 2000 || final_gid != 2000) {
-        fprintf(stderr, "[vflow_shell_exec] failed to switch to shell identity (uid=2000,gid=2000); final uid=%d gid=%d\n",
+        // 降权失败（常见于 Kernelsu/部分 su 管理器下 setuid(2000) 被拒），
+        // 不再硬 return 1 导致整个 worker 完全无法启动；改为 WARN + 继续执行，
+        // 让 ShellWorker 至少先跑起来（即使不是 uid 2000 也比完全起不来强，
+        // ShellWorker 内部还有 Kotlin 层 dropPrivilegesToShell() 二次兜底）。
+        fprintf(stderr,
+                "[vflow_shell_exec] WARN: failed to switch fully to shell identity (uid=2000,gid=2000);"
+                " final uid=%d gid=%d. Continuing anyway (ShellWorker will retry dropPrivilegesToShell()).\n",
                 (int)final_uid, (int)final_gid);
-        return 1;
+    } else {
+        fprintf(stderr, "[vflow_shell_exec] running as uid=%d gid=%d\n", (int)final_uid, (int)final_gid);
     }
-
-    fprintf(stderr, "[vflow_shell_exec] running as uid=%d gid=%d\n", (int)final_uid, (int)final_gid);
 
     // 解析前缀形式的环境变量赋值（例如 CLASSPATH=...），然后直接 execvp 目标程序
     int cmd_index = 1;

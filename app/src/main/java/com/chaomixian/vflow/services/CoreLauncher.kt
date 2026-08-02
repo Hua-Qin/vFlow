@@ -142,11 +142,37 @@ object CoreLauncher {
                         privilegeMode = VFlowCoreBridge.privilegeMode
                     )
                 } else {
-                    DebugLogger.w(TAG, "vFlowCore 启动后未响应 Ping (尝试10次后仍失败)，请检查日志: ${logFile.absolutePath}")
+                    // 启动后未响应：立即读 server_process.log 的头部和尾部（如果存在），
+                    // 写入 App 调试日志，便于在不 adb 的情况下定位（setuid 失败/类加载错误等）。
+                    val headTail = try {
+                        if (logFile.exists() && logFile.length() > 0L) {
+                            val head = logFile.readBytes().take(2048).toByteArray().toString(Charsets.UTF_8)
+                            val tail = if (logFile.length() > 2048) {
+                                val start = (logFile.length() - 2048).coerceAtLeast(0L)
+                                val arr = java.io.RandomAccessFile(logFile, "r").use { raf ->
+                                    raf.seek(start)
+                                    val buf = ByteArray(2048)
+                                    val n = raf.read(buf)
+                                    if (n > 0) buf.copyOf(n) else ByteArray(0)
+                                }
+                                String(arr, Charsets.UTF_8)
+                            } else ""
+                            "（${logFile.length()} bytes）\n===== HEAD =====\n$head\n${if (tail.isNotEmpty()) "===== TAIL =====\n$tail" else ""}"
+                        } else if (logFile.exists()) {
+                            "（文件为空，${logFile.length()} bytes）"
+                        } else {
+                            "（日志文件不存在）"
+                        }
+                    } catch (t: Throwable) {
+                        "（读取日志异常: ${t.javaClass.simpleName}: ${t.message}）"
+                    }
+                    DebugLogger.w(TAG, "vFlowCore 启动后未响应 Ping (尝试10次后仍失败)。\n" +
+                            "server_process.log 路径: ${logFile.absolutePath}\n" +
+                            "server_process.log 内容: $headTail")
                     LaunchResult(
                         success = false,
                         mode = finalMode,
-                        error = "启动后未响应 Ping (等待5秒后超时)"
+                        error = "启动后未响应 Ping (等待5秒后超时). server_process.log: $headTail"
                     )
                 }
             }
@@ -333,17 +359,22 @@ object CoreLauncher {
             // ROOT 模式：需要部署 vflow_shell_exec 来降权启动 shell worker
             val shellLauncher = deployShellLauncher(context)
             if (shellLauncher != null) {
-                // 创建临时 shell 脚本来正确处理参数
+                // 注意：脚本必须用 trap EXIT 自删除，不能与启动命令在同一行用 & 并列——
+                // 否则某些 shell 实现在 app_process 读完脚本前就 rm 掉脚本自身，导致
+                // "sh: can't open ...: No such file" 或脚本内容截断。
                 val tempScript = File(StorageManager.tempDir, "start_vflowcore_${System.currentTimeMillis()}.sh")
                 tempScript.writeText("""
                     #!/system/bin/sh
+                    # 退出时再删自己，保证读完。
+                    trap 'rm -f "\$0"' EXIT
                     export CLASSPATH="$classpath"
                     exec app_process /system/bin $CORE_CLASS --shell-launcher "${shellLauncher.absolutePath}" --app-package "$packageName" $transportArgs
                 """.trimIndent())
                 tempScript.setExecutable(true)
+                tempScript.setReadable(true, false)
 
                 DebugLogger.d(TAG, "ROOT 模式：使用 vflow_shell_exec 降权，path: ${shellLauncher.absolutePath}")
-                "sh ${tempScript.absolutePath} > \"$logPath\" 2>&1 & rm -f ${tempScript.absolutePath}"
+                "sh ${tempScript.absolutePath} > \"$logPath\" 2>&1 &"
             } else {
                 DebugLogger.w(TAG, "ROOT 模式但 vflow_shell_exec 部署失败，回退到直接启动（可能有权限问题）")
                 "sh -c 'export CLASSPATH=\"$classpath\"; exec app_process /system/bin $CORE_CLASS --app-package \"$packageName\" $transportArgs' > \"$logPath\" 2>&1 &"

@@ -45,9 +45,13 @@ class ShellWorker(
         // 如果通过 app_process 直接启动（回退模式），则需要降权
         if (SystemUtils.isRoot()) {
             System.err.println("⚠️ ShellWorker started as Root, dropping privileges...")
-            if (!SystemUtils.dropPrivilegesToShell()) {
-                System.err.println("❌ Critical: Failed to drop privileges for ShellWorker.")
-                exitProcess(1)
+            val dropped = SystemUtils.dropPrivilegesToShell()
+            if (!dropped) {
+                // 降权失败（Kernelsu/部分 su 管理器下 setuid/setgid 被拒是常见情况）。
+                // 不再硬性退出，而是警告后以 root 身份继续——此时 ShellWorker 能启动并对外服务，
+                // 只是部分系统服务调用会因包名/uid 不匹配而拒绝，可在后续调用中单独处理。
+                System.err.println("⚠️ dropPrivilegesToShell() failed; continuing as UID ${SystemUtils.getMyUid()}." +
+                        " (Some system service calls may be denied, but worker will still run.)")
             }
         } else {
             println("✅ ShellWorker running as Shell (UID: ${SystemUtils.getMyUid()})")

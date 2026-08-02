@@ -95,6 +95,17 @@ object ShellManager {
             return
         }
 
+        // 仅当用户偏好不是「纯 ROOT」时才去预连接 Shizuku。
+        // 明确选 ROOT 的用户不需要 Shizuku，白等 15s×3 次绑定重试是纯浪费。
+        val prefs = context.getSharedPreferences("vFlowPrefs", Context.MODE_PRIVATE)
+        val coreMode = prefs.getString("preferred_core_launch_mode", "shizuku")
+        val defaultShellMode = prefs.getString("default_shell_mode", "shizuku")
+        val explicitlyRoot = (coreMode == "root") && (defaultShellMode == "root")
+        if (explicitlyRoot) {
+            DebugLogger.d(TAG, "偏好为 ROOT 模式，跳过 Shizuku 预连接。")
+            return
+        }
+
         DebugLogger.d(TAG, "发起 Shizuku 服务预连接...")
         // 启动一个后台协程来执行连接，不阻塞主线程
         scope.launch {
@@ -119,21 +130,66 @@ object ShellManager {
         }
     }
 
+    // isRootAvailable 结果缓存：避免在短时间内多次触发 su 弹窗或 PermissionDenied
+    @Volatile
+    private var cachedRootAvailable: Pair<Boolean, Long>? = null
+    private const val ROOT_CACHE_MS = 10_000L
+    private const val ROOT_CHECK_TIMEOUT_MS = 5_000L
+
     /**
      * 检查 Root 权限是否可用。
      * 尝试执行 'su' 命令并检查退出码。
+     *
+     * 增强：
+     * - 5s 超时（防止 su 弹窗未回应时永久阻塞）
+     * - 10s 结果缓存（防止刷屏 su 弹窗/重复 PermissionDenied 日志）
+     * - 失败时把具体原因写入 DebugLogger（Permission denied vs 超时 vs su 不存在）
      */
     fun isRootAvailable(): Boolean {
-        return try {
-            val process = createRootShellProcess()
-            val os = DataOutputStream(process.outputStream)
-            os.writeBytes("exit\n")
-            os.flush()
-            val exitCode = process.waitFor()
-            exitCode == 0
-        } catch (e: Exception) {
-            false
+        cachedRootAvailable?.let { (cached, ts) ->
+            if (System.currentTimeMillis() - ts < ROOT_CACHE_MS) return cached
         }
+        val result = try {
+            val process = try {
+                createRootShellProcess()
+            } catch (t: Throwable) {
+                // 最常见的失败：Runtime.exec("su -mm ...") -> IOException("Cannot run program \"su\": error=13, Permission denied"
+                // 或 SecurityException（MIUI 进程管理拦截）
+                DebugLogger.w(TAG, "isRootAvailable: 无法启动 su 进程: ${t.javaClass.simpleName}: ${t.message}")
+                return cacheAndReturn(false)
+            }
+            try {
+                val os = DataOutputStream(process.outputStream)
+                os.writeBytes("exit\n")
+                os.flush()
+            } catch (t: Throwable) {
+                DebugLogger.w(TAG, "isRootAvailable: 写入 exit 指令失败 (su 管道已断？): ${t.message}")
+            }
+            val finishedInTime = try {
+                process.waitFor(ROOT_CHECK_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+            } catch (_: InterruptedException) { false }
+            if (!finishedInTime) {
+                DebugLogger.w(TAG, "isRootAvailable: su 命令在 ${ROOT_CHECK_TIMEOUT_MS}ms 内未退出（大概率是 su 授权弹窗没点或 Magisk/KernelSU 无响应）。判定为失败，缓存 10s 避免重复等待。")
+                try { process.destroy() } catch (_: Exception) {}
+                return cacheAndReturn(false)
+            }
+            val exit = try { process.exitValue() } catch (_: IllegalThreadStateException) { -1 }
+            if (exit == 0) {
+                cacheAndReturn(true)
+            } else {
+                DebugLogger.w(TAG, "isRootAvailable: su 退出码非 0 (exit=$exit)。su 可能已被拒绝或不可用。")
+                cacheAndReturn(false)
+            }
+        } catch (t: Throwable) {
+            DebugLogger.w(TAG, "isRootAvailable: 未预期异常: ${t.javaClass.simpleName}: ${t.message}")
+            cacheAndReturn(false)
+        }
+        return result
+    }
+
+    private fun cacheAndReturn(value: Boolean): Boolean {
+        cachedRootAvailable = value to System.currentTimeMillis()
+        return value
     }
 
     /**
