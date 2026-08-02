@@ -29,8 +29,7 @@ import kotlin.coroutines.resumeWithException
 object ShellManager {
     private const val TAG = "vFlowShellManager"
     // MIUI/EMUI 等受限 ROM 首次绑定 Shizuku UserService 时需拉起 :vflow_shizuku 进程，
-    // 3s 远不够（实测常需 5-10s）。放宽到 15s，配合下方 bindUserService 返回值检查，
-    // 真正失败时也能快速返回。
+    // 3s 远不够（实测常需 5-10s），导致 onServiceConnected 在 3s 内未回调而超时失败。放宽到 15s。
     private const val BIND_TIMEOUT_MS = 15000L
     private const val MAX_RETRY_COUNT = 3
     private const val DEPLOY_SUCCESS_MARKER = "__VFLOW_DEPLOY_OK__"
@@ -796,16 +795,11 @@ object ShellManager {
                     }
                 }
 
-                // 确保绑定操作在主线程执行
+                // 确保绑定操作在主线程执行。
+                // 注意：Shizuku API 13.x 的 bindUserService 返回 Unit（无返回值），
+                // 无法据其判断绑定是否发起成功，因此依赖上方 BIND_TIMEOUT_MS 作为兜底。
                 scope.launch(Dispatchers.Main) {
-                    val bound = Shizuku.bindUserService(userServiceArgs, connection)
-                    if (!bound && continuation.isActive) {
-                        // bindUserService 返回 false 表示绑定未能发起（Shizuku 已停止或服务无法启动），
-                        // 此时 onServiceConnected 永远不会被回调，立即失败以避免等待整个超时周期。
-                        continuation.resumeWithException(
-                            RuntimeException("Shizuku bindUserService 返回 false，无法发起绑定。")
-                        )
-                    }
+                    Shizuku.bindUserService(userServiceArgs, connection)
                 }
             }
         }
