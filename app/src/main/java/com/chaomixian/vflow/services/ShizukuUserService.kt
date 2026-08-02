@@ -109,9 +109,12 @@ class ShizukuUserService(private val context: Context) : IShizukuUserService.Stu
             val stderrJob = serviceScope.async(Dispatchers.IO) { readStream(process.errorStream) }
 
             // 等待进程完成（后台启动类命令通常 ≤ 1s；常规命令给予更大的上限，但仍避免无限等）
+            // withTimeout 是 suspend，所以这里用 runBlocking 包一下；exec 不是挂起函数。
             val finished = try {
-                withTimeout(if (wantsDetach) 15_000L else 90_000L) {
-                    process.waitFor()
+                runBlocking(Dispatchers.IO) {
+                    withTimeout(if (wantsDetach) 15_000L else 90_000L) {
+                        process.waitFor()
+                    }
                 }
                 true
             } catch (_: TimeoutCancellationException) {
