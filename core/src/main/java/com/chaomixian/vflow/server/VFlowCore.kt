@@ -194,7 +194,14 @@ object VFlowCore {
             }
         }
 
-        Thread.sleep(1000)
+        // NOTE: 原来这里有 Thread.sleep(1000)，会阻塞 Master accept()，导致
+        // 「连接立即成功但 ping 回复要 1~3s」的现象；改为异步等一下，让 worker
+        // 有时间 bind 端口，但 Master 自己立刻进入 accept() 保证 ping 低延迟。
+        // 我们不会在这里 join，因为 worker 失败是各自日志诊断的问题，不是 Master 启动的阻塞点。
+        executor.submit {
+            try { Thread.sleep(1000) } catch (_: InterruptedException) {}
+            println("--- Workers spawned (async settle complete) ---")
+        }
     }
 
     private fun setupWorkerLogger(process: Process, tag: String) {

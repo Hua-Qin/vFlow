@@ -75,13 +75,10 @@ object CoreLauncher {
         if (forceRestart) {
             if (VFlowCoreBridge.ping()) {
                 DebugLogger.d(TAG, "强制重启模式：检测到旧的 vFlowCore 正在运行，先停止...")
-                stop(context)
-                delay(1500)
-
-                if (VFlowCoreBridge.ping()) {
-                    DebugLogger.w(TAG, "进程仍未退出，强制等待...")
-                    delay(1000)
-                }
+                // 等待真退出口令端口关闭后再启动，避免 exit → 新 Core 启动后被旧 Core 同进程退出时序搞 ECONNREFUSED
+                stop(context, waitForExit = true, timeoutMs = 5000L)
+            } else {
+                DebugLogger.d(TAG, "强制重启模式：Core 未运行，跳过 stop 直接启动")
             }
         }
 
@@ -191,7 +188,30 @@ object CoreLauncher {
      * 发送 shutdown 请求让 Core 自己退出，不使用 pkill。
      */
     suspend fun stop(context: Context): Boolean {
+        return stop(context, waitForExit = true, timeoutMs = 5000L)
+    }
+
+    /**
+     * 停止 vFlowCore。
+     *
+     * @param waitForExit true 时会等待「ping 不再响应 + PID 消失」两者同时满足，避免 exit 指令
+     * 在 shutdown hook 与新 Core 启动之间产生时序竞争（旧 Core 把刚 accept 到的新请求按 exit
+     * 流程结束时顺便退出，导致新启动 Core 还没 bind 上来就 ECONNREFUSED）。
+     */
+    suspend fun stop(context: Context, waitForExit: Boolean, timeoutMs: Long = 5000L): Boolean {
         DebugLogger.i(TAG, "正在停止 vFlowCore...")
+
+        // 0. 尝试先记一下当前 Core 的 PID，便于后面判断「真的是这个旧进程退出了」
+        val oldPidsBefore = try {
+            ShellManager.execShellCommand(context, buildFindCorePidCommand(), ShellManager.ShellMode.AUTO)
+                .lineSequence()
+                .map { it.trim() }
+                .filter { it.isNotEmpty() && it.all(Char::isDigit) }
+                .toSet()
+        } catch (_: Exception) { emptySet() }
+        if (oldPidsBefore.isNotEmpty()) {
+            DebugLogger.d(TAG, "停止前观测到 vFlowCore PID=${oldPidsBefore.joinToString()}")
+        }
 
         // 1. 发送优雅退出请求
         val shutdownSent = VFlowCoreBridge.shutdown()
@@ -202,13 +222,53 @@ object CoreLauncher {
             DebugLogger.i(TAG, "shutdown 请求已成功发送")
         }
 
-        // 2. 主动断开 Bridge 连接（避免 ping() 重连）
+        // 2. 主动断开 Bridge 连接（避免 ping() 重连
         VFlowCoreBridge.disconnect()
 
-        // 3. 等待 Core 进程退出（不给时间让Core退出，直接返回）
-        // Core 进程会在后台自行退出
-        DebugLogger.i(TAG, "vFlowCore 停止请求已完成")
+        // 3. 等待 Core 进程真正退出（端口关闭 + PID 消失）
+        if (!waitForExit) {
+            DebugLogger.i(TAG, "vFlowCore 停止请求已完成（未等待退出）")
+            return true
+        }
 
+        val deadline = System.currentTimeMillis() + timeoutMs
+        var iteration = 0
+        val shellMode = resolveLaunchMode(context, LaunchMode.AUTO).toShellMode()
+        while (System.currentTimeMillis() < deadline) {
+            iteration++
+            val pingAlive = try {
+                val bridgeConnected = VFlowCoreBridge.ping()
+                bridgeConnected
+            } catch (_: Exception) { false }
+
+            val findCmd = buildFindCorePidCommand()
+            val pidsNow = try {
+                ShellManager.execShellCommand(context, findCmd, shellMode)
+                    .lineSequence()
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() && it.all(Char::isDigit) }
+                    .toSet()
+            } catch (_: Exception) { emptySet() }
+            val anyOldPidStillAlive = oldPidsBefore.any { it in pidsNow }
+
+            if (!pingAlive && !anyOldPidStillAlive) {
+                DebugLogger.i(TAG, "vFlowCore 已确认退出 (iter=$iteration)")
+                return true
+            }
+            DebugLogger.d(
+                TAG,
+                "等待退出 iter=$iteration: pingAlive=$pingAlive, " +
+                    "remainingOldPids=${(oldPidsBefore intersect pidsNow).joinToString()}, " +
+                    "allNowPids=${pidsNow.joinToString()}"
+            )
+            delay(200)
+        }
+
+        // 超时了还在：尝试强制 kill（用 stop()
+        DebugLogger.w(TAG, "等待 vFlowCore 退出超时(${timeoutMs}ms)，尝试强制清理残留进程...")
+        forceStop(context)
+        delay(300)
+        DebugLogger.i(TAG, "vFlowCore 停止请求已完成（超时兜底）")
         return true
     }
 

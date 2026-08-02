@@ -86,20 +86,55 @@ class ShizukuUserService(private val context: Context) : IShizukuUserService.Stu
         return try {
             DebugLogger.d(TAG, "开始执行命令: $command")
 
+            // 判断调用方是否想「后台启动一个长期存在的进程」(典型：Core 启动脚本以 `&` 结尾或含 `nohup`)。
+            // 这类命令如果在 ProcessBuilder 里同步 waitFor()，sh 会等到后台子进程的管道 EOF /
+            // 作业状态稳定才返回，容易卡 10s+；于是改用 setsid + </dev/null >/dev/null 2>&1 &
+            // 让后代与当前 sh 会话完全脱钩，sh 立刻退出，waitFor() 很快返回。
+            val wantsDetach =
+                command.trimEnd().endsWith('&') || command.contains("nohup ", ignoreCase = true)
+            val finalCmd = if (wantsDetach) {
+                "($command) </dev/null >/dev/null 2>&1 & disown ; echo DETACHED"
+            } else {
+                command
+            }
+
             // 使用 sh -c 执行命令，这样可以处理管道、重定向等复杂命令
-            val processBuilder = ProcessBuilder("sh", "-c", command)
+            val processBuilder = ProcessBuilder("sh", "-c", finalCmd)
             processBuilder.redirectErrorStream(false)  // 分别处理 stdout 和 stderr
 
             val process = processBuilder.start()
 
-            // 读取输出
-            val stdout = readStream(process.inputStream)
-            val stderr = readStream(process.errorStream)
+            // 并行读取 stdout/stderr，避免某一端缓冲写满导致子进程阻塞（死锁）
+            val stdoutJob = serviceScope.async(Dispatchers.IO) { readStream(process.inputStream) }
+            val stderrJob = serviceScope.async(Dispatchers.IO) { readStream(process.errorStream) }
 
-            // 等待进程完成
-            val exitCode = process.waitFor()
+            // 等待进程完成（后台启动类命令通常 ≤ 1s；常规命令给予更大的上限，但仍避免无限等）
+            val finished = try {
+                withTimeout(if (wantsDetach) 15_000L else 90_000L) {
+                    process.waitFor()
+                }
+                true
+            } catch (_: TimeoutCancellationException) {
+                DebugLogger.w(TAG, "命令执行超时，将销毁子进程：command=$command")
+                try { process.destroy() } catch (_: Exception) {}
+                try { runBlocking { delay(500) }; process.destroyForcibly() } catch (_: Exception) {}
+                false
+            }
+            val exitCode = if (finished) process.exitValue() else -99
+
+            val stdout = runBlocking { stdoutJob.await() }
+            val stderr = runBlocking { stderrJob.await() }
 
             DebugLogger.d(TAG, "命令执行完成: exitCode=$exitCode, stdout长度=${stdout.length}, stderr长度=${stderr.length}")
+
+            // 后台启动类命令：只要 sh 自身成功退出（且我们打印了 DETACHED）就视为成功
+            if (wantsDetach && exitCode == 0 && stdout.contains("DETACHED")) {
+                return ShellExecResult(
+                    output = "Command detached successfully",
+                    exitCode = 0,
+                    success = true
+                )
+            }
 
             // 根据退出码返回结果
             when {
@@ -129,6 +164,8 @@ class ShizukuUserService(private val context: Context) : IShizukuUserService.Stu
                 exitCode = -1,
                 success = false
             )
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             val errorMsg = "Exception: ${e.message}"
             DebugLogger.e(TAG, errorMsg, e)
