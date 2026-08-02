@@ -123,10 +123,17 @@ android {
 
     splits {
         abi {
+            // 支持通过 -Pvflow.abi=<abi> 限制只构建单个 ABI（CI 加速用）；不传则构建全部 ABI + universal。
+            val targetAbi = (project.findProperty("vflow.abi") as String?)?.trim()?.takeIf { it.isNotEmpty() }
             isEnable = true
             reset()
-            include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
-            isUniversalApk = true
+            if (targetAbi != null) {
+                include(targetAbi)
+                isUniversalApk = false
+            } else {
+                include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+                isUniversalApk = true
+            }
         }
     }
 
