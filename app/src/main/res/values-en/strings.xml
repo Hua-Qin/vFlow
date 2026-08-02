@@ -1278,6 +1278,7 @@
     <string name="onboarding_continue_without_shell">Continue (Without Shell)</string>
     <string name="onboarding_save_and_continue">Save Config and Continue</string>
     <string name="onboarding_shizuku_not_running">Shizuku not running or not authorized</string>
+    <string name="onboarding_shizuku_requesting">Activating Shizuku permission…</string>
     <string name="onboarding_root_unavailable">Unable to obtain Root permission</string>
 
     <string name="onboarding_permissions_required">Required Permissions</string>

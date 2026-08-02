@@ -16,16 +16,21 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
 import androidx.core.view.updatePadding
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.RecyclerView
 import com.chaomixian.vflow.R
 import com.chaomixian.vflow.core.workflow.WorkflowPermissionRecovery
 import com.chaomixian.vflow.services.ShellManager
+import com.chaomixian.vflow.services.VFlowShizukuController
 import com.chaomixian.vflow.ui.common.BaseActivity
 import com.google.android.material.appbar.AppBarLayout
 import com.google.android.material.button.MaterialButton
 import android.widget.Button
 import android.widget.TextView
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import rikka.shizuku.Shizuku
 import com.chaomixian.vflow.core.locale.toast
@@ -64,11 +69,14 @@ class PermissionActivity : BaseActivity() {
     private val shizukuPermissionListener =
         Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
             if (requestCode == SHIZUKU_PERMISSION_REQUEST_CODE) {
-                // 收到结果后，刷新权限状态
+                DebugLogger.i(TAG, "Shizuku 权限回调: requestCode=$requestCode grantResult=$grantResult")
                 refreshPermissionsStatus()
             }
         }
 
+    private var shizukuStateCollector: Job? = null
+
+    @OptIn(ExperimentalCoroutinesApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_permission)
@@ -86,7 +94,32 @@ class PermissionActivity : BaseActivity() {
         continueButton = findViewById(R.id.button_permission_continue)
         recyclerView = findViewById(R.id.recycler_view_permissions)
 
-        Shizuku.addRequestPermissionResultListener(shizukuPermissionListener)
+        // Shizuku 权限请求监听器（全局还多挂了 VFlowShizukuController，这里挂只是为了
+        // PermissionActivity 内点击「Shizuku 权限」条目后的即时刷新）。
+        runCatching {
+            Shizuku.addRequestPermissionResultListener(shizukuPermissionListener)
+        }.onFailure { DebugLogger.w(TAG, "addRequestPermissionResultListener 异常（可忽略）: ${it.message}") }
+
+        // 实时订阅 VFlowShizukuController 状态：
+        //  1) 用户在 Shizuku App 里手动点了「允许」→ binder 事件 + permission 回调立刻通知
+        //  2) Shizuku 服务杀掉重启 → onBinderDead/Received 立刻重算 Shizuku 行的 badge
+        // 不再需要 onResume 每 500ms 轮询或者靠用户切后台切前台来刷新。
+        shizukuStateCollector = lifecycleScope.launch {
+            lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                VFlowShizukuController.stateFlow.collect { s ->
+                    DebugLogger.d(TAG, "VFlowShizukuController.stateFlow -> $s  -> refreshPermissionsStatus")
+                    refreshPermissionsStatus()
+                }
+            }
+        }
+        lifecycleScope.launch {
+            lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                VFlowShizukuController.eventFlow.collect { ev ->
+                    DebugLogger.d(TAG, "VFlowShizukuController.eventFlow -> $ev")
+                    refreshPermissionsStatus()
+                }
+            }
+        }
 
         setupUI()
     }
@@ -116,8 +149,13 @@ class PermissionActivity : BaseActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        // 移除监听器，防止内存泄漏
-        Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener)
+        shizukuStateCollector?.cancel()
+        // 官方 Changelog 13.1.1：
+        // Fix Shizuku#removeXXXListener crashes on Android 7.1 and earlier (CopyOnWriteArrayList#removeIf
+        // throws UnsupportedOperationException). 即使我们 minSdk 较高，也要包 try/catch。
+        runCatching {
+            Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener)
+        }.onFailure { DebugLogger.w(TAG, "removeRequestPermissionResultListener 异常（安全忽略）: ${it.message}") }
     }
 
     override fun onResume() {
@@ -152,7 +190,57 @@ class PermissionActivity : BaseActivity() {
     }
 
     /**
-     * 重构权限请求逻辑，以正确处理权限组。
+     * 重构 Shizuku 权限请求逻辑：按 VFlowShizukuController 的状态分流。
+     *
+     * 原逻辑是「不管什么状态都 try Shizuku.requestPermission → catch toast」，这会在
+     * 「Shizuku 未激活」或者「用户点过不再询问(shouldShowRationale=true)」时也 catch，
+     * 用户根本不知道去 Shizuku App 激活，或者不知道自己之前选过「不再询问」。
+     *
+     * 新逻辑（完全对应官方 README 的 requestPermission 范式）：
+     *   isPreV11()                                → UNSUPPORTED 版本提示升级
+     *   checkSelfPermission == GRANTED            → 已授权，直接 return
+     *   shouldShowRequestPermissionRationale=true → toast「请手动在 Shizuku App 开启权限」
+     *   否则                                      → Shizuku.requestPermission(code)
+     * 并且在 Binder 还没拿到（NOT_INSTALLED / INACTIVE）时，先跳 Shizuku App / 下载页引导用户激活。
+     */
+    private fun requestShizukuPermissionV11Plus() {
+        DebugLogger.d(TAG, "requestShizukuPermissionV11Plus: 当前状态=${VFlowShizukuController.stateFlow.value}")
+        if (runCatching { Shizuku.isPreV11() }.getOrDefault(false)) {
+            toast("Shizuku 版本过旧（pre-v11），请升级 Shizuku App 后再试")
+            VFlowShizukuController.openShizukuAppOrDownload(this)
+            return
+        }
+        if (!runCatching { Shizuku.pingBinder() }.getOrDefault(false)) {
+            // Binder 拿不到：要么 Shizuku 未安装，要么用户还没在 Shizuku App 点「启动」。
+            VFlowShizukuController.openShizukuAppOrDownload(this)
+            return
+        }
+        val perm = runCatching { Shizuku.checkSelfPermission() }
+            .getOrDefault(android.content.pm.PackageManager.PERMISSION_DENIED)
+        if (perm == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            // 已经授权，直接刷新 UI。
+            refreshPermissionsStatus()
+            return
+        }
+        val rationale = runCatching { Shizuku.shouldShowRequestPermissionRationale() }.getOrDefault(false)
+        if (rationale) {
+            // 用户此前选了「拒绝且不再询问」。此时 requestPermission() 会被 Shizuku 静默拒绝，
+            // 所以直接提示用户手动去 Shizuku App 开启权限。
+            toast("请在 Shizuku App 中手动为 vFlow 开启权限后返回")
+            VFlowShizukuController.openShizukuAppOrDownload(this)
+            return
+        }
+        // 正常请求授权流程：调用官方 API + 全局 permission listener 等结果。
+        runCatching {
+            Shizuku.requestPermission(SHIZUKU_PERMISSION_REQUEST_CODE)
+        }.onFailure { t ->
+            DebugLogger.e(TAG, "Shizuku.requestPermission fail", t)
+            toast(R.string.permission_toast_shizuku_not_started)
+        }
+    }
+
+    /**
+     * 重构权限请求逻辑，以正确处理权限组 & Shizuku v11+ 4 状态分流。
      */
     private fun requestPermission(permission: Permission) {
         when (permission.type) {
@@ -168,12 +256,7 @@ class PermissionActivity : BaseActivity() {
             }
             PermissionType.SPECIAL -> {
                 if (permission.id == PermissionManager.SHIZUKU.id) {
-                    try {
-                        Shizuku.requestPermission(SHIZUKU_PERMISSION_REQUEST_CODE)
-                    } catch (e: Exception) {
-                        // Shizuku 未启动或异常
-                        toast(R.string.permission_toast_shizuku_not_started)
-                    }
+                    requestShizukuPermissionV11Plus()
                     return
                 }
                 // 使用 PermissionManager 提供的统一接口获取 Intent

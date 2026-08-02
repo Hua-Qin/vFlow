@@ -437,13 +437,13 @@ private fun CoreManagementScreen(
                 },
                 icon = Icons.Default.Terminal,
                 iconTint = MaterialTheme.colorScheme.tertiary,
-                isAvailable = ShellManager.isShizukuActive(context) && !unixSocketEnabled,
+                isAvailable = (!unixSocketEnabled),
                 isRunning = isChecking,
                 isSelected = selectedLaunchMode == ShellManager.ShellMode.SHIZUKU,
                 onClick = {
                     if (isChecking) return@LaunchMethodCard
-                    if (!ShellManager.isShizukuActive(context)) {
-                        showToast(context.getString(R.string.toast_shizuku_not_active))
+                    if (unixSocketEnabled) {
+                        showToast(context.getString(R.string.toast_core_unix_socket_shizuku_disabled))
                         return@LaunchMethodCard
                     }
 
@@ -452,9 +452,24 @@ private fun CoreManagementScreen(
                     prefs.edit { putString("preferred_core_launch_mode", "shizuku") }
                     selectedLaunchMode = ShellManager.ShellMode.SHIZUKU
 
-                    statusDetail = context.getString(R.string.status_starting_shizuku)
-                    isChecking = true
                     coroutineScope.launch {
+                        // 先确保 Shizuku 已经激活/授权。
+                        // 对应「检测到用户没有授权时自动申请」的要求：
+                        //  - 未授权 -> 自动弹 Shizuku.requestPermission
+                        //  - 未安装/未激活 -> 打开 Shizuku App / 下载页
+                        //  - 拒绝不再询问 -> toast 手动去 Shizuku App 开
+                        val shizukuOk = ShellManager.ensureShizukuReady(
+                            context,
+                            timeoutMs = 30_000L,
+                            fromUiThread = true
+                        )
+                        if (!shizukuOk) {
+                            // ensureShizukuReady 内部已 toast 过原因，不再重复提示
+                            return@launch
+                        }
+
+                        statusDetail = context.getString(R.string.status_starting_shizuku)
+                        isChecking = true
                         val success = onStartServerWithMode(ShellManager.ShellMode.SHIZUKU)
                         isChecking = false
                         isServerRunning = success

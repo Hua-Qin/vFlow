@@ -121,12 +121,70 @@ object ShellManager {
 
     /**
      * 检查 Shizuku 是否可用且已授权。
+     *
+     * 注意：这里仍然使用低开销的 pingBinder+checkSelfPermission 直接调用（不读 Flow），
+     * 因为 UI 渲染时可能会非常频繁地调用 isShizukuActive；粗粒度的「全局状态通知」则
+     * 通过 VFlowShizukuController.stateFlow/eventFlow 广播给订阅方。
      */
     fun isShizukuActive(context: Context): Boolean {
-        return try {
+        val quick = try {
             Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
-        } catch (e: Exception) {
-            false
+        } catch (e: Throwable) { false }
+        if (quick) return true
+        // 慢路径：如果上面返回 false，但用户近期在 Shizuku App 里同意了权限，状态机可能还没
+        // 被 binder 事件触发（启动阶段），这里再兜底用 controller 重新计算一次。
+        try {
+            return VFlowShizukuController.stateFlow.value ==
+                VFlowShizukuController.ShizukuState.AUTHORIZED
+        } catch (_: Throwable) { return false }
+    }
+
+    /**
+     * 在使用 Shizuku 前**自动请求**权限的入口（满足用户「检测未授权则自动申请」的要求）。
+     * 行为：
+     *  - AUTHORIZED          -> true
+     *  - UNAUTHORIZED (未拒绝不再询问) -> 自动调 requestPermission，阻塞等待结果最长
+     *    [timeoutMs]，真的授权成功返回 true
+     *  - NOT_INSTALLED       -> 跳下载页，返回 false
+     *  - INACTIVE            -> 打开 Shizuku App 激活页，返回 false
+     *  - UNSUPPORTED_VERSION -> 打日志 false
+     *
+     * @param fromUiThread 如果当前确实在 Activity/Fragment 场景且需要 UI 弹窗交互则传 true；
+     *                     否则（后台 Service 等）只会跳页面不会等待用户点弹窗，立刻返回 false。
+     */
+    suspend fun ensureShizukuReady(
+        context: Context,
+        timeoutMs: Long = 30_000L,
+        fromUiThread: Boolean = true
+    ): Boolean {
+        val start = System.currentTimeMillis()
+        val res = VFlowShizukuController.ensureReady(context, timeoutMs, autoRequestIfPossible = true)
+        DebugLogger.d(TAG,
+            "ensureShizukuReady: $res  (elapsed=${System.currentTimeMillis() - start}ms)")
+        return when (res) {
+            VFlowShizukuController.ShizukuReadyResult.AlreadyReady,
+            VFlowShizukuController.ShizukuReadyResult.GrantedAfterRequest -> true
+            VFlowShizukuController.ShizukuReadyResult.ShizukuNotInstalled,
+            VFlowShizukuController.ShizukuReadyResult.ShizukuNotActivated -> {
+                // 未装 / 未激活：引导用户跳转，不在后台阻塞
+                if (fromUiThread) scope.launch(Dispatchers.Main) {
+                    VFlowShizukuController.openShizukuAppOrDownload(context)
+                }
+                false
+            }
+            VFlowShizukuController.ShizukuReadyResult.DeniedByUser -> {
+                scope.launch(Dispatchers.Main) {
+                    context.toast("Shizuku 未授权，已自动申请；如未弹出授权框，请手动在 Shizuku App 中开启权限")
+                }
+                false
+            }
+            VFlowShizukuController.ShizukuReadyResult.UnsupportedVersion -> {
+                scope.launch(Dispatchers.Main) {
+                    context.toast("当前 Shizuku 版本过旧（pre-v11），请升级 Shizuku App")
+                }
+                false
+            }
+            VFlowShizukuController.ShizukuReadyResult.Cancelled -> false
         }
     }
 
@@ -812,17 +870,31 @@ object ShellManager {
     /**
      * 简化 connect 函数，移除并发控制逻辑。
      * 它现在只负责执行单次的绑定尝试。
+     *
+     * 增强（对应「未授权则自动申请」的要求）：
+     *  1. 进入连接前先 ensureShizukuReady()，它会在真的「未授权」场景自动 requestPermission，
+     *     或「Shizuku 未激活 / 未安装」引导用户跳转 App / 下载页；
+     *  2. ensureShizukuReady 失败直接抛异常（和旧逻辑保持一致），调用方会在 connect 的
+     *     3 次重试外层捕获。
      */
     private suspend fun connect(context: Context): IShizukuUserService {
-        if (!isShizukuActive(context)) {
-            throw RuntimeException("Shizuku 未激活或未授权。")
+        if (!ensureShizukuReady(context, timeoutMs = 30_000L, fromUiThread = true)) {
+            throw RuntimeException("Shizuku 未激活或未授权（已尝试自动申请/引导跳转，见上方 ensureShizukuReady 日志）。")
         }
 
         return withTimeout(BIND_TIMEOUT_MS) {
             suspendCancellableCoroutine { continuation ->
-                val userServiceArgs = Shizuku.UserServiceArgs(ComponentName(context, ShizukuUserService::class.java))
+                // NOTE: UserServiceArgs 必须设置一个稳定的 tag 字符串。
+                // Shizuku 官方文档明确：「If tag is not set, class name will be used,
+                // but class name is unstable after ProGuard/R8.」之前用默认 class name
+                // 会在 release 构建 R8 混淆后「tag 每次都变化」，导致 Shizuku 认为
+                // 这是不同的 UserService 实例，出现 bindUserService 随机不回调
+                // onServiceConnected、或者重复启动新实例的问题。
+                val userServiceArgs = Shizuku.UserServiceArgs(
+                    ComponentName(context, ShizukuUserService::class.java))
                     .daemon(false)
                     .processNameSuffix(":vflow_shizuku")
+                    .tag("vflow_shizuku_user_service")
                     .version(1)
 
                 val connection = object : ServiceConnection {

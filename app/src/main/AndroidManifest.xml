@@ -48,7 +48,10 @@
         tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS"
         tools:ignore="ProtectedPermissions" />
-    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
+    <!-- NOTE: moe.shizuku.manager.permission.API_V23 是 Shizuku pre-v11 遗留权限声明。
+         Shizuku-API v11 起改为 Shizuku 自建的权限模型（Shizuku.requestPermission/checkSelfPermission），
+         不再需要此 manifest 权限，且在某些 ROM 上会被误以为是自定义权限组导致权限管理 UI 错乱，故删除。
+         moe.shizuku.manager.permission.API_V23 -->
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
     <uses-permission android:name="android.permission.READ_SMS" />
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions" />

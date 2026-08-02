@@ -38,14 +38,27 @@ object ShellDiagnostic {
     private fun checkShizukuStatus() {
         DebugLogger.d(TAG, "--- 检查 Shizuku 状态 ---")
         try {
-            if (Shizuku.pingBinder()) {
-                DebugLogger.d(TAG, "Shizuku 服务: 已连接 (Version ${Shizuku.getVersion()})")
-                val permission = if (Shizuku.isPreV11()) Shizuku.checkSelfPermission() else Shizuku.checkRemotePermission("android.permission.SHIZUKU")
-                DebugLogger.d(TAG, "Shizuku 权限: ${if(permission == PackageManager.PERMISSION_GRANTED) "已授权" else "未授权"}")
+            if (rikka.shizuku.Shizuku.pingBinder()) {
+                val version = try { rikka.shizuku.Shizuku.getVersion() } catch (_: Throwable) { -1 }
+                DebugLogger.d(TAG, "Shizuku 服务: 已连接 (Version $version)")
+                // Shizuku-API v11+ (12.1.0 后已 drop pre-v11 support) 统一使用
+                // Shizuku.checkSelfPermission() 检查权限；不再使用 v11 前遗留的
+                // checkRemotePermission("android.permission.SHIZUKU")（那是 pre-v11 的远端权限
+                // 检查方式，v11 服务端会返回不稳定的 DENIED 假阴性）。
+                val permission = try {
+                    rikka.shizuku.Shizuku.checkSelfPermission()
+                } catch (t: Throwable) {
+                    DebugLogger.w(TAG, "Shizuku.checkSelfPermission 抛异常: ${t.javaClass.simpleName}: ${t.message}")
+                    android.content.pm.PackageManager.PERMISSION_DENIED
+                }
+                val rationale = runCatching { rikka.shizuku.Shizuku.shouldShowRequestPermissionRationale() }.getOrDefault(false)
+                DebugLogger.d(TAG,
+                    "Shizuku 权限: ${if (permission == android.content.pm.PackageManager.PERMISSION_GRANTED) "已授权" else "未授权"}" +
+                    " (shouldShowRationale=$rationale)")
             } else {
-                DebugLogger.w(TAG, "Shizuku 服务: 未连接")
+                DebugLogger.w(TAG, "Shizuku 服务: 未连接（Shizuku App 未安装或 Shizuku 未启动）")
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             DebugLogger.e(TAG, "Shizuku 检查异常", e)
         }
     }

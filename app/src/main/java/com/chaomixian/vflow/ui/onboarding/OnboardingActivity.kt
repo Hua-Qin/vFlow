@@ -523,15 +523,19 @@ fun OnboardingPageContent(
 fun ShellConfigPage(onStateChanged: (Boolean, suspend () -> Unit) -> Unit) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE) }
+    val scope = rememberCoroutineScope()
 
     // 在 Composable 上下文中预先获取字符串
     val shizukuNotRunningMsg = stringResource(R.string.onboarding_shizuku_not_running)
     val rootUnavailableMsg = stringResource(R.string.onboarding_root_unavailable)
+    val shizukuRequestingMsg = stringResource(R.string.onboarding_shizuku_requesting)
 
     var selectedMode by remember { mutableStateOf("none") } // none, shizuku, root
     var isVerified by remember { mutableStateOf(false) }
     var autoEnableAcc by remember { mutableStateOf(false) }
     var forceKeepAlive by remember { mutableStateOf(false) }
+    // 「正在尝试激活/申请 Shizuku 权限」的 loading 状态，避免用户重复点击
+    var shizukuVerifying by remember { mutableStateOf(false) }
 
     suspend fun persistSelection() {
         prefs.edit {
@@ -549,14 +553,44 @@ fun ShellConfigPage(onStateChanged: (Boolean, suspend () -> Unit) -> Unit) {
         }
     }
 
-    fun verifyMode(mode: String): Boolean {
+    /**
+     * 验证所选模式是否可用。
+     * 对 Shizuku 模式的增强（对应「检测到用户没有授权时自动申请」的要求）：
+     *  - AUTHORIZED 直接返回 true；
+     *  - UNAUTHORIZED (且没选过拒绝不再询问) 自动调用 Shizuku.requestPermission，
+     *    等用户授权结果最长 30s，成功则 true；
+     *  - NOT_INSTALLED / INACTIVE 自动打开 Shizuku App / 下载页引导用户激活；
+     *  - 其他情况 Toast 提示并返回 false。
+     */
+    suspend fun verifyMode(mode: String): Boolean {
         return when (mode) {
             "shizuku" -> {
-                val verified = ShellManager.isShizukuActive(context)
-                if (!verified) {
-                    Toast.makeText(context, shizukuNotRunningMsg, Toast.LENGTH_SHORT).show()
+                // 先走快查（避免已授权时还显示 loading）
+                if (ShellManager.isShizukuActive(context)) {
+                    return true
                 }
-                verified
+                shizukuVerifying = true
+                try {
+                    Toast.makeText(context, shizukuRequestingMsg, Toast.LENGTH_SHORT).show()
+                    // ShellManager.ensureShizukuReady 会根据状态：
+                    //  - 未授权 -> requestPermission 并等待；
+                    //  - 未装/未激活 -> openShizukuAppOrDownload 引导跳转；
+                    //  - 拒绝不再询问 -> toast 提示手动去 Shizuku App 开。
+                    val ok = ShellManager.ensureShizukuReady(
+                        context,
+                        timeoutMs = 30_000L,
+                        fromUiThread = true
+                    )
+                    if (!ok) {
+                        // ensureShizukuReady 内部已 toast 过具体原因，这里再兜底一条
+                        if (!ShellManager.isShizukuActive(context)) {
+                            Toast.makeText(context, shizukuNotRunningMsg, Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    ok
+                } finally {
+                    shizukuVerifying = false
+                }
             }
             "root" -> {
                 val verified = ShellManager.isRootAvailable()
@@ -569,8 +603,14 @@ fun ShellConfigPage(onStateChanged: (Boolean, suspend () -> Unit) -> Unit) {
         }
     }
 
+    // 用户切换模式时：如果刚切换到一个新的 shell 模式，自动跑一次验证
+    // （这是对「检测到未授权就自动申请」的补充：不用等用户点「验证」按钮，选完 Shizuku
+    //  就直接弹 Shizuku 授权对话框 / 打开 Shizuku App 激活页）
     LaunchedEffect(selectedMode) {
-        isVerified = verifyMode(selectedMode)
+        isVerified = false
+        if (selectedMode != "none") {
+            isVerified = verifyMode(selectedMode)
+        }
     }
 
     Column(
@@ -627,17 +667,35 @@ fun ShellConfigPage(onStateChanged: (Boolean, suspend () -> Unit) -> Unit) {
         Spacer(modifier = Modifier.height(24.dp))
 
         // 验证区域
-        AnimatedContent(targetState = selectedMode, label = "verification") { mode ->
+        AnimatedContent(targetState = selectedMode to shizukuVerifying, label = "verification") { (mode, verifying) ->
             Column(horizontalAlignment = Alignment.Start) {
                 if (mode != "none") {
                     if (!isVerified) {
                         Button(
-                            onClick = { isVerified = verifyMode(mode) },
+                            onClick = {
+                                scope.launch {
+                                    isVerified = verifyMode(mode)
+                                }
+                            },
+                            enabled = !verifying,
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = MaterialTheme.colorScheme.tertiary
                             )
                         ) {
-                            Text(stringResource(R.string.onboarding_verify_button))
+                            if (verifying && mode == "shizuku") {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    color = LocalContentColor.current
+                                )
+                                Spacer(Modifier.width(8.dp))
+                            }
+                            Text(
+                                if (verifying && mode == "shizuku")
+                                    stringResource(R.string.onboarding_shizuku_requesting)
+                                else
+                                    stringResource(R.string.onboarding_verify_button)
+                            )
                         }
                     } else {
                         // 验证通过后的高级选项

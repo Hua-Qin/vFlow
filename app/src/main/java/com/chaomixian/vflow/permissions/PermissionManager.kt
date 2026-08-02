@@ -485,8 +485,48 @@ object PermissionManager {
 
     /** Shizuku 策略 */
     private val shizukuStrategy = object : PermissionStrategy {
-        override fun isGranted(context: Context, permission: Permission): Boolean = ShellManager.isShizukuActive(context)
-        override fun createRequestIntent(context: Context, permission: Permission): Intent? = null // Shizuku 有专门的 API 请求
+        override fun isGranted(context: Context, permission: Permission): Boolean =
+            ShellManager.isShizukuActive(context)
+
+        /**
+         * 未激活/未安装时，给 UI 返回一个 Intent（跳 Shizuku App / 下载页）。
+         * 仅仅未授权（pingBinder OK 但 PERMISSION_DENIED）时返回 null——因为这种场景
+         * 应该走 Shizuku.requestPermission（标准 API 方式，见 PermissionActivity）。
+         */
+        override fun createRequestIntent(context: Context, permission: Permission): Intent? {
+            val state = com.chaomixian.vflow.services.VFlowShizukuController.stateFlow.value
+            return when (state) {
+                com.chaomixian.vflow.services.VFlowShizukuController.ShizukuState.NOT_INSTALLED,
+                com.chaomixian.vflow.services.VFlowShizukuController.ShizukuState.INACTIVE ->
+                    // 用 marker Intent + 自定义 action；PermissionManager.getSpecialPermissionIntent
+                    // 返回的是 Intent，UI 侧需要 startActivity 时我们其实想让它调
+                    // VFlowShizukuController.openShizukuAppOrDownload(context)。为了兼容现有
+                    // PermissionActivity 的 startActivityForResult 约定，这里直接返回一个
+                    // 跳 Shizuku App 首页 / 下载页的 Intent，和 controller 的实现一致。
+                    buildShizukuOpenIntent(context)
+                else -> null
+            }
+        }
+
+        override suspend fun autoGrant(context: Context): Boolean {
+            // 「自动授权 Shizuku」的等价实现：若只是未授权 → requestPermission 等 30s
+            // 结果；若未安装/未激活则跳页面。这其实就是 ShellManager.ensureShizukuReady
+            // 的语义，直接复用它。
+            DebugLogger.d(TAG, "autoGrant(SHIZUKU): 调用 ensureShizukuReady ...")
+            return ShellManager.ensureShizukuReady(context, timeoutMs = 30_000L, fromUiThread = true)
+                .also { DebugLogger.d(TAG, "autoGrant(SHIZUKU) -> $it") }
+        }
+
+        private fun buildShizukuOpenIntent(context: Context): Intent? {
+            @Suppress("DEPRECATION") val pm = context.packageManager
+            listOf("rikka.shizuku", "moe.shizuku.privileged.api").forEach { pkg ->
+                runCatching { pm.getLaunchIntentForPackage(pkg)?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                    .getOrNull()?.let { return it }
+            }
+            // fallback：浏览器下载页
+            return Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://shizuku.rikka.app/download/"))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
     }
 
     /** Root 策略 */

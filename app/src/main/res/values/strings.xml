@@ -1278,6 +1278,7 @@
     <string name="onboarding_continue_without_shell">继续 (不使用 Shell)</string>
     <string name="onboarding_save_and_continue">保存配置并继续</string>
     <string name="onboarding_shizuku_not_running">Shizuku 未运行或未授权</string>
+    <string name="onboarding_shizuku_requesting">正在激活 Shizuku 权限…</string>
     <string name="onboarding_root_unavailable">无法获取 Root 权限</string>
 
     <string name="onboarding_permissions_required">必要的权限</string>
