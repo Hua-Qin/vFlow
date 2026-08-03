@@ -1,17 +1,16 @@
 name: Android CI
 
 # Auto-adapted for Android (Kotlin + Gradle Kotlin DSL, multi-module :app/:core, native CMake).
-# Only builds the arm64-v8a debug APK to keep CI fast.
+# High-performance CI: only builds the arm64-v8a debug APK with maximal caching & parallelism.
 #
-# Caching strategy (heavily cached; keys derived from immutable lockfiles so stale caches
-# never poison correctness):
-#   1. JDK tarball + Gradle deps  : setup-java cache=gradle        (~100MB, hits on setup)
-#   2. Gradle wrapper dist        : actions/cache on wrapper/dists (~150MB gradle-X-bin.zip)
-#   3. Konan / Kotlin Native      : actions/cache on ~/.konan      (~300MB LLVM toolchains)
-#   4. Android SDK components     : actions/cache on ANDROID_HOME
-#        platforms / build-tools / ndk / cmake                     (hundreds of MB, AGP auto-fetches)
-#   5. Gradle build cache         : gradle/actions/setup-gradle@v4 (always; handles deps+gc)
-#   6. CMake / .cxx per-module    : actions/cache per build.gradle hash
+# Caching strategy (6 layers, keys derived from immutable lockfiles):
+#   1. JDK tarball                 : setup-java cache=gradle        (~100MB)
+#   2. Gradle wrapper dist         : actions/cache on wrapper/dists (~150MB gradle-X-bin.zip)
+#   3. Konan / Kotlin Native       : actions/cache on ~/.konan      (~300MB LLVM toolchains)
+#   4. Android SDK components      : actions/cache on ANDROID_HOME
+#        platforms / build-tools / ndk / cmake                     (hundreds of MB)
+#   5. Gradle build cache + deps   : gradle/actions/setup-gradle@v4 (always; handles deps+gc)
+#   6. CMake / .cxx per-module     : actions/cache per C++ source hash
 #                                   (avoids re-linking vflow_shell_exec when C++ untouched)
 
 on:
@@ -28,13 +27,14 @@ concurrency:
 jobs:
   build:
     name: Build Android APK (arm64-v8a)
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     permissions:
       contents: read
     env:
-      # Pin SDK root explicitly so cache paths and Gradle agree regardless of runner image.
-      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-      ANDROID_HOME: /usr/local/lib/android/sdk
+      # Windows runner uses this default path; pin for cache consistency.
+      ANDROID_SDK_ROOT: ${{ runner.os == 'Windows' && 'C:\\Users\\runneradmin\\AppData\\Local\\Android\\Sdk' || '/usr/local/lib/android/sdk' }}
+      ANDROID_HOME: ${{ runner.os == 'Windows' && 'C:\\Users\\runneradmin\\AppData\\Local\\Android\\Sdk' || '/usr/local/lib/android/sdk' }}
+      GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.parallel=true -Dorg.gradle.caching=true"
 
     steps:
       - name: Checkout code
@@ -45,14 +45,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          # NOTE: we intentionally do NOT set `cache: gradle` here.
-          # gradle/actions/setup-gradle@v4 (below) owns the Gradle home cache and
-          # running both would double-save the same ~/.gradle tree, wasting quota.
-          # Setup-java still caches the Temurin tarball itself.
+          # NOTE: intentionally do NOT set `cache: gradle` here.
+          # gradle/actions/setup-gradle@v4 (below) owns the Gradle home cache.
 
       # ---------------------------------------------------------------------
-      # Cache key hashes.  Kept as a separate step so we can dump them in the
-      # log and debug miss reasons without scrolling through Post Cache steps.
+      # Cache key hashes. Separate step so we can dump them in the log
+      # and debug miss reasons without scrolling through Post Cache steps.
       # ---------------------------------------------------------------------
       - name: Compute cache keys (diagnostic)
         id: cache-keys
@@ -119,22 +117,14 @@ jobs:
             ${{ runner.os }}-android-sdk-
 
       # (5) Gradle build cache + Gradle dependency cache.
-      #     setup-gradle is preferred over manual ~/.gradle cache because it:
-      #       * sizes caches correctly
-      #       * runs `--stop` at end
-      #       * does cache entries GC
-      #       * avoids double-caching (mutually exclusive with manual .gradle cache)
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: wrapper
-          # Encryption key is OPTIONAL; only applied when the repo has the secret set.
-          # Without it, gradle-home cache falls back to action-default encryption (per-repo).
           cache-encryption-key: ${{ secrets.GRADLE_CACHE_ENCRYPTION_KEY || '' }}
           gradle-home-cache-cleanup: true
 
       # (6) CMake / Ninja outputs per module (~vflow_shell_exec native .so).
-      #     Keyed on C++ sources + CMakeLists so code changes invalidate cleanly.
       - name: Cache C++ native build outputs (.cxx)
         uses: actions/cache@v4
         with:
@@ -150,7 +140,8 @@ jobs:
             ${{ runner.os }}-cxx-arm64-v8a-
 
       - name: Install dependencies & build arm64-v8a debug APK
-        run: ./gradlew --stacktrace :app:assembleDebug -Pvflow.abi=arm64-v8a
+        shell: bash
+        run: ./gradlew --stacktrace :app:assembleDebug -Pvflow.abi=arm64-v8a --build-cache --parallel --no-daemon
 
       - name: Upload Android APK artifact
         uses: actions/upload-artifact@v4
@@ -159,3 +150,4 @@ jobs:
           path: app/build/outputs/apk/**/*.apk
           if-no-files-found: error
           retention-days: 14
+          compression-level: 6
