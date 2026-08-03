@@ -820,6 +820,10 @@
     <string name="ai_generation_stop_message">AI is generating. Do you want to interrupt it?</string>
     <string name="ai_generation_continue_waiting">Keep waiting</string>
     <string name="ai_generation_stop_and_close">Stop and close</string>
+    <string name="ai_generation_using_default_model">Using session default model: %1$s</string>
+    <string name="ai_generation_no_default_model">No default model found in session settings. Expand the config below to fill in manually</string>
+    <string name="ai_generation_model_loaded">Default model config loaded from session settings</string>
+    <string name="ai_generation_model_load_failed">Session default model not configured. Please fill in manually</string>
     <string name="hint_base_url">Base URL</string>
     <string name="hint_api_key">API Key</string>
     <string name="text_ready">Ready</string>
@@ -1289,6 +1293,9 @@
     <string name="onboarding_permissions_skip_message">If these required permissions are missing, some automation features may work incorrectly or not work at all. Do you still want to continue?</string>
     <string name="onboarding_permissions_skip_confirm">Continue anyway</string>
     <string name="onboarding_grant">Grant</string>
+    <string name="onboarding_permissions_grant_all">Grant all permissions at once</string>
+    <string name="onboarding_permissions_granting">Auto granting…</string>
+    <string name="onboarding_permissions_grant_hint">Active Shizuku or Root required for one-click grant</string>
 
     <string name="onboarding_completion_title">Ready to Launch!</string>
     <string name="onboarding_completion_desc">You have completed all basic configurations.\nWe have prepared a sample workflow for you,\nlet\'s experience automation now!</string>

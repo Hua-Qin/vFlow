@@ -820,6 +820,10 @@
     <string name="ai_generation_stop_message">AI 正在生成中，确定要中断吗？</string>
     <string name="ai_generation_continue_waiting">继续等待</string>
     <string name="ai_generation_stop_and_close">停止并关闭</string>
+    <string name="ai_generation_using_default_model">当前使用会话默认模型：%1$s</string>
+    <string name="ai_generation_no_default_model">未在会话设置中找到默认模型，请展开下方配置手动填写</string>
+    <string name="ai_generation_model_loaded">已从会话设置加载默认模型配置</string>
+    <string name="ai_generation_model_load_failed">会话默认模型未配置，请手动填写</string>
     <string name="hint_base_url">Base URL</string>
     <string name="hint_api_key">API Key</string>
     <string name="text_ready">准备就绪</string>
@@ -1289,6 +1293,9 @@
     <string name="onboarding_permissions_skip_message">如果缺少这些必要权限，部分自动化功能可能无法正常工作，甚至完全不可用。确定仍要继续吗？</string>
     <string name="onboarding_permissions_skip_confirm">仍然继续</string>
     <string name="onboarding_grant">授权</string>
+    <string name="onboarding_permissions_grant_all">一键授权所有权限</string>
+    <string name="onboarding_permissions_granting">正在自动授权…</string>
+    <string name="onboarding_permissions_grant_hint">需要已激活 Shizuku 或 Root 才能使用一键授权</string>
 
     <string name="onboarding_completion_title">准备起飞！</string>
     <string name="onboarding_completion_desc">您已经完成了所有基本配置。\n我们为您准备了一个示例工作流，\n现在就开始体验自动化吧！</string>

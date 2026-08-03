@@ -782,6 +782,13 @@ fun PermissionsPage(
     val context = LocalContext.current
     var permissionsGranted by remember { mutableStateOf(false) }
     var showSkipDialog by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    // 一键授权状态
+    var isGranting by remember { mutableStateOf(false) }
+    var grantHint by remember { mutableStateOf<String?>(null) }
+    // 用于通知 PermissionItemView 在一键授权后重新检查权限状态
+    var refreshTrigger by remember { mutableStateOf(0) }
 
     // 连续点击跳过逻辑
     var clickCount by remember { mutableStateOf(0) }
@@ -858,10 +865,150 @@ fun PermissionsPage(
         )
         Text(stringResource(R.string.onboarding_permissions_desc2), color = MaterialTheme.colorScheme.onSurfaceVariant)
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
+        // --- 一键授权区块（融入布局，毫无违和感）---
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+            ),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.AutoAwesome,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = stringResource(R.string.onboarding_permissions_grant_all),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.onboarding_permissions_grant_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(
+                    onClick = {
+                        if (isGranting) return@Button
+                        scope.launch {
+                            isGranting = true
+                            grantHint = null
+                            try {
+                                val canUseShell = ShellManager.isShizukuActive(context) ||
+                                    ShellManager.isRootAvailable()
+                                if (!canUseShell) {
+                                    Toast.makeText(
+                                        context,
+                                        R.string.permission_grant_all_no_shell,
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                    grantHint = context.getString(R.string.permission_grant_all_no_shell)
+                                    isGranting = false
+                                    return@launch
+                                }
+
+                                Toast.makeText(
+                                    context,
+                                    R.string.permission_grant_all_started,
+                                    Toast.LENGTH_SHORT
+                                ).show()
+
+                                var grantedCount = 0
+                                var failedCount = 0
+
+                                for (permission in requiredPermissions) {
+                                    if (PermissionManager.isGranted(context, permission)) continue
+                                    val success = PermissionManager.autoGrantPermission(context, permission)
+                                    if (success) grantedCount++ else failedCount++
+                                }
+
+                                kotlinx.coroutines.delay(300)
+                                checkAllPermissions()
+                                refreshTrigger++
+
+                                val msgResId = when {
+                                    grantedCount > 0 && failedCount == 0 ->
+                                        R.string.permission_grant_all_success
+                                    grantedCount > 0 && failedCount > 0 ->
+                                        R.string.permission_grant_all_partial
+                                    failedCount > 0 && grantedCount == 0 ->
+                                        R.string.permission_grant_all_failed
+                                    else -> R.string.permission_grant_all_already_granted
+                                }
+                                val msg = when (msgResId) {
+                                    R.string.permission_grant_all_success ->
+                                        context.getString(msgResId, grantedCount)
+                                    R.string.permission_grant_all_partial ->
+                                        context.getString(msgResId, grantedCount, failedCount)
+                                    R.string.permission_grant_all_failed ->
+                                        context.getString(msgResId, failedCount)
+                                    else -> context.getString(msgResId)
+                                }
+                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                grantHint = msg
+                            } catch (e: Exception) {
+                                val errMsg = context.getString(
+                                    R.string.permission_grant_all_error,
+                                    e.message ?: "unknown"
+                                )
+                                Toast.makeText(context, errMsg, Toast.LENGTH_SHORT).show()
+                                grantHint = errMsg
+                            } finally {
+                                isGranting = false
+                            }
+                        }
+                    },
+                    enabled = !isGranting,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    if (isGranting) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onPrimary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(stringResource(R.string.onboarding_permissions_granting))
+                    } else {
+                        Text(stringResource(R.string.onboarding_permissions_grant_all))
+                    }
+                }
+                // 显示授权结果提示
+                grantHint?.let { hint ->
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = hint,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // --- 权限列表 ---
         requiredPermissions.forEach { permission ->
-            PermissionItemView(permission) { checkAllPermissions() }
+            PermissionItemView(permission, refreshTrigger) { checkAllPermissions() }
             Spacer(modifier = Modifier.height(12.dp))
         }
 
@@ -899,9 +1046,22 @@ fun PermissionsPage(
 }
 
 @Composable
-fun PermissionItemView(permission: Permission, onCheckChanged: () -> Unit) {
+fun PermissionItemView(
+    permission: Permission,
+    refreshTrigger: Int = 0,
+    onCheckChanged: () -> Unit
+) {
     val context = LocalContext.current
     var isGranted by remember { mutableStateOf(PermissionManager.isGranted(context, permission)) }
+
+    // 一键授权后由父组件递增 refreshTrigger，触发重新检查权限状态
+    LaunchedEffect(refreshTrigger) {
+        val latest = PermissionManager.isGranted(context, permission)
+        if (latest != isGranted) {
+            isGranted = latest
+            onCheckChanged()
+        }
+    }
 
     // 使用 Launcher 处理权限请求
     val requestPermissionLauncher = rememberLauncherForActivityResult(
