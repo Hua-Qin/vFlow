@@ -32,9 +32,9 @@ jobs:
       contents: read
     env:
       # Windows runner uses this default path; pin for cache consistency.
-      ANDROID_SDK_ROOT: ${{ runner.os == 'Windows' && 'C:\\Users\\runneradmin\\AppData\\Local\\Android\\Sdk' || '/usr/local/lib/android/sdk' }}
-      ANDROID_HOME: ${{ runner.os == 'Windows' && 'C:\\Users\\runneradmin\\AppData\\Local\\Android\\Sdk' || '/usr/local/lib/android/sdk' }}
-      GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.parallel=true -Dorg.gradle.caching=true"
+      ANDROID_SDK_ROOT: 'C:\Users\runneradmin\AppData\Local\Android\Sdk'
+      ANDROID_HOME: 'C:\Users\runneradmin\AppData\Local\Android\Sdk'
+      GRADLE_OPTS: '-Dorg.gradle.daemon=false -Dorg.gradle.parallel=true -Dorg.gradle.caching=true'
 
     steps:
       - name: Checkout code
@@ -105,11 +105,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ${{ env.ANDROID_SDK_ROOT }}/platforms
-            ${{ env.ANDROID_SDK_ROOT }}/build-tools
-            ${{ env.ANDROID_SDK_ROOT }}/ndk
-            ${{ env.ANDROID_SDK_ROOT }}/cmake
-            ${{ env.ANDROID_SDK_ROOT }}/licenses
+            C:\Users\runneradmin\AppData\Local\Android\Sdk\platforms
+            C:\Users\runneradmin\AppData\Local\Android\Sdk\build-tools
+            C:\Users\runneradmin\AppData\Local\Android\Sdk\ndk
+            C:\Users\runneradmin\AppData\Local\Android\Sdk\cmake
+            C:\Users\runneradmin\AppData\Local\Android\Sdk\licenses
           key: >-
             ${{ runner.os }}-android-sdk-${{
               steps.cache-keys.outputs.sdk_bootstrap }}
