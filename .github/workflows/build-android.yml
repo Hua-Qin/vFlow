@@ -3,15 +3,15 @@ name: Android CI
 # Auto-adapted for Android (Kotlin + Gradle Kotlin DSL, multi-module :app/:core, native CMake).
 # High-performance CI: only builds the arm64-v8a debug APK with maximal caching & parallelism.
 #
-# Caching strategy (6 layers, keys derived from immutable lockfiles):
+# Caching strategy (5 layers, keys derived from immutable lockfiles):
 #   1. JDK tarball                 : setup-java cache=gradle        (~100MB)
 #   2. Gradle wrapper dist         : actions/cache on wrapper/dists (~150MB gradle-X-bin.zip)
 #   3. Konan / Kotlin Native       : actions/cache on ~/.konan      (~300MB LLVM toolchains)
-#   4. Android SDK components      : actions/cache on ANDROID_HOME
-#        platforms / build-tools / ndk / cmake                     (hundreds of MB)
-#   5. Gradle build cache + deps   : gradle/actions/setup-gradle@v4 (always; handles deps+gc)
-#   6. CMake / .cxx per-module     : actions/cache per C++ source hash
+#   4. Gradle build cache + deps   : gradle/actions/setup-gradle@v4 (always; handles deps+gc)
+#   5. CMake / .cxx per-module     : actions/cache per C++ source hash
 #                                   (avoids re-linking vflow_shell_exec when C++ untouched)
+# NOTE: Android SDK components are NOT cached because windows-latest image pre-installs them.
+#   Caching SDK paths that differ between image versions causes "SDK location not found" errors.
 
 on:
   push:
@@ -31,9 +31,6 @@ jobs:
     permissions:
       contents: read
     env:
-      # Windows runner uses this default path; pin for cache consistency.
-      ANDROID_SDK_ROOT: 'C:\Users\runneradmin\AppData\Local\Android\Sdk'
-      ANDROID_HOME: 'C:\Users\runneradmin\AppData\Local\Android\Sdk'
       GRADLE_OPTS: '-Dorg.gradle.daemon=false -Dorg.gradle.parallel=true -Dorg.gradle.caching=true'
 
     steps:
@@ -45,8 +42,41 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          # NOTE: intentionally do NOT set `cache: gradle` here.
-          # gradle/actions/setup-gradle@v4 (below) owns the Gradle home cache.
+
+      # Detect the actual Android SDK path on the runner image and write local.properties.
+      # This is critical on Windows where the path can change between image versions.
+      - name: Configure Android SDK path
+        shell: powershell
+        run: |
+          Write-Host "ANDROID_HOME=$env:ANDROID_HOME"
+          Write-Host "ANDROID_SDK_ROOT=$env:ANDROID_SDK_ROOT"
+
+          $sdkPath = $env:ANDROID_HOME
+          if (-not $sdkPath) { $sdkPath = $env:ANDROID_SDK_ROOT }
+          if (-not $sdkPath) { $sdkPath = "$env:LOCALAPPDATA\Android\Sdk" }
+
+          if (-not (Test-Path $sdkPath)) {
+            Write-Host "SDK not found at $sdkPath, searching..."
+            $candidates = @(
+              "$env:LOCALAPPDATA\Android\Sdk",
+              "C:\Users\runneradmin\AppData\Local\Android\Sdk",
+              "C:\Android\Sdk"
+            )
+            foreach ($c in $candidates) {
+              if (Test-Path $c) { $sdkPath = $c; break }
+            }
+          }
+
+          Write-Host "Using SDK path: $sdkPath"
+          if (-not (Test-Path $sdkPath)) {
+            throw "Android SDK not found anywhere!"
+          }
+
+          # Write local.properties with Java-style escaped backslashes
+          $escaped = $sdkPath -replace '\\', '\\'
+          "sdk.dir=$escaped" | Set-Content -Path local.properties -Encoding ascii
+          Write-Host "local.properties content:"
+          Get-Content local.properties
 
       # ---------------------------------------------------------------------
       # Cache key hashes. Separate step so we can dump them in the log
@@ -69,14 +99,6 @@ jobs:
               find app -maxdepth 3 -name 'CMakeLists.txt' -print -exec cat {} \;
           ) 2>/dev/null | sha256sum | awk '{print $1}')
           echo "native=$NATIVE_HASH" >> "$GITHUB_OUTPUT"
-          SDK_BOOTSTRAP_HASH=$( (
-              echo "AGP from root build.gradle.kts:"
-              grep -E 'com\.android\.tools\.build:gradle|agp' build.gradle.kts buildSrc/**/*.kt* 2>/dev/null || true
-              echo "SDK versions:"
-              grep -E 'compileSdk|targetSdk|minSdk|ndkVersion' \
-                app/build.gradle.kts core/build.gradle.kts 2>/dev/null || true
-          ) | sha256sum | awk '{print $1}')
-          echo "sdk_bootstrap=$SDK_BOOTSTRAP_HASH" >> "$GITHUB_OUTPUT"
           cat "$GITHUB_OUTPUT"
 
       # (2) Gradle wrapper dist (~150MB gradle-X-bin.zip).
@@ -100,23 +122,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-konan-
 
-      # (4) Android SDK components (platforms / build-tools / ndk / cmake).
-      - name: Cache Android SDK components
-        uses: actions/cache@v4
-        with:
-          path: |
-            C:\Users\runneradmin\AppData\Local\Android\Sdk\platforms
-            C:\Users\runneradmin\AppData\Local\Android\Sdk\build-tools
-            C:\Users\runneradmin\AppData\Local\Android\Sdk\ndk
-            C:\Users\runneradmin\AppData\Local\Android\Sdk\cmake
-            C:\Users\runneradmin\AppData\Local\Android\Sdk\licenses
-          key: >-
-            ${{ runner.os }}-android-sdk-${{
-              steps.cache-keys.outputs.sdk_bootstrap }}
-          restore-keys: |
-            ${{ runner.os }}-android-sdk-
-
-      # (5) Gradle build cache + Gradle dependency cache.
+      # (4) Gradle build cache + Gradle dependency cache.
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -124,7 +130,7 @@ jobs:
           cache-encryption-key: ${{ secrets.GRADLE_CACHE_ENCRYPTION_KEY || '' }}
           gradle-home-cache-cleanup: true
 
-      # (6) CMake / Ninja outputs per module (~vflow_shell_exec native .so).
+      # (5) CMake / Ninja outputs per module (~vflow_shell_exec native .so).
       - name: Cache C++ native build outputs (.cxx)
         uses: actions/cache@v4
         with:
@@ -138,15 +144,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cxx-arm64-v8a-${{ steps.cache-keys.outputs.native }}-
             ${{ runner.os }}-cxx-arm64-v8a-
-
-      - name: Write local.properties with SDK path
-        shell: bash
-        run: |
-          # AGP on Windows requires sdk.dir with escaped backslashes in local.properties
-          # ANDROID_HOME env var is also set, but AGP's SdkLocator prefers local.properties
-          echo 'sdk.dir=C\:\\Users\\runneradmin\\AppData\\Local\\Android\\Sdk' > local.properties
-          echo "Written local.properties:"
-          cat local.properties
 
       - name: Install dependencies & build arm64-v8a debug APK
         shell: bash
