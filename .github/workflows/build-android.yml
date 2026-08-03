@@ -142,10 +142,9 @@ jobs:
       - name: Write local.properties with SDK path
         shell: bash
         run: |
-          # AGP on Windows requires sdk.dir in local.properties or ANDROID_HOME env var.
-          # The env var is set but AGP sometimes ignores it; write local.properties to be safe.
-          SDK_PATH="C:\\Users\\runneradmin\\AppData\\Local\\Android\\Sdk"
-          echo "sdk.dir=${SDK_PATH}" > local.properties
+          # AGP on Windows requires sdk.dir with escaped backslashes in local.properties
+          # ANDROID_HOME env var is also set, but AGP's SdkLocator prefers local.properties
+          echo 'sdk.dir=C\:\\Users\\runneradmin\\AppData\\Local\\Android\\Sdk' > local.properties
           echo "Written local.properties:"
           cat local.properties
 
