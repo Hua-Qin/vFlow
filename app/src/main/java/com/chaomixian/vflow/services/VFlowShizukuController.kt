@@ -353,8 +353,10 @@ object VFlowShizukuController {
     // ==================================================================
     private fun getProcessName(app: Application): String {
         return runCatching {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) app.getProcessName()
-            else {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                // Application.getProcessName() is a static method available since API 9
+                android.app.Application.getProcessName()
+            } else {
                 val pid = android.os.Process.myPid()
                 val am = app.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
                 am.runningAppProcesses?.firstOrNull { it.pid == pid }?.processName ?: "unknown"
