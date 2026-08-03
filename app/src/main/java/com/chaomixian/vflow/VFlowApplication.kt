@@ -6,8 +6,8 @@ import com.chaomixian.vflow.services.VFlowShizukuController
 import com.chaomixian.vflow.core.logging.DebugLogger
 import com.chaomixian.vflow.core.logging.LogManager
 import com.chaomixian.vflow.services.AccessibilityServiceStatus
-import com.chaomixian.vflow.services.CrashReportManager
-import com.chaomixian.vflow.services.TelemetryManager
+import com.chaomixian.vflow.core.logging.CrashReportManager
+import com.chaomixian.vflow.core.telemetry.TelemetryManager
 
 class VFlowApplication : Application() {
     override fun onCreate() {
@@ -31,7 +31,7 @@ class VFlowApplication : Application() {
         //  - enableMultiProcessSupport
         VFlowShizukuController.initialize(this)
 
-        // 无障碍服务状态：尽早在 Application 启动时做一次快照，用于后续状态检查的缓存
-        AccessibilityServiceStatus.refreshSnapshot(applicationContext)
+        // 无障碍服务状态：尽早在 Application 启动时做一次检查，用于后续状态检查的缓存
+        AccessibilityServiceStatus.isEnabledInSettings(applicationContext)
     }
 }

@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.os.IBinder
 import android.provider.Settings
 import android.view.Surface
+import android.widget.Toast
 import com.chaomixian.vflow.core.logging.DebugLogger
 import com.chaomixian.vflow.permissions.Permission
 import com.chaomixian.vflow.permissions.PermissionManager
@@ -172,15 +173,15 @@ object ShellManager {
                 }
                 false
             }
-            VFlowShizukuController.ShizukuReadyResult.DeniedByUser -> {
+            is VFlowShizukuController.ShizukuReadyResult.DeniedByUser -> {
                 scope.launch(Dispatchers.Main) {
-                    context.toast("Shizuku 未授权，已自动申请；如未弹出授权框，请手动在 Shizuku App 中开启权限")
+                    Toast.makeText(context, "Shizuku 未授权，已自动申请；如未弹出授权框，请手动在 Shizuku App 中开启权限", Toast.LENGTH_SHORT).show()
                 }
                 false
             }
             VFlowShizukuController.ShizukuReadyResult.UnsupportedVersion -> {
                 scope.launch(Dispatchers.Main) {
-                    context.toast("当前 Shizuku 版本过旧（pre-v11），请升级 Shizuku App")
+                    Toast.makeText(context, "当前 Shizuku 版本过旧（pre-v11），请升级 Shizuku App", Toast.LENGTH_SHORT).show()
                 }
                 false
             }

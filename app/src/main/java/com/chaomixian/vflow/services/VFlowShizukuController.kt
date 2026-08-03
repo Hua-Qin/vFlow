@@ -145,7 +145,7 @@ object VFlowShizukuController {
             DebugLogger.i(TAG, "Sui.init 完成: installed=$suiOk  (Sui 用户此值为 true，Shizuku 用户为 false 均属正常)")
 
             // 2) 多进程支持（vFlow 至少有 :vflow_shizuku 进程）
-            runCatching { ShizukuProvider.enableMultiProcessSupport(app, false) }
+            runCatching { ShizukuProvider.enableMultiProcessSupport(false) }
                 .onFailure { DebugLogger.w(TAG, "enableMultiProcessSupport 抛异常（通常在 Shizuku 未激活时发生，可忽略）: ${it.message}") }
 
             // 3) 注册全局监听器（addXxxListener 重复调用是安全的，Shizuku 内部会去重）
@@ -353,8 +353,10 @@ object VFlowShizukuController {
     // ==================================================================
     private fun getProcessName(app: Application): String {
         return runCatching {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) app.processName
-            else {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                // Application.getProcessName() is a static method available since API 9
+                android.app.Application.getProcessName()
+            } else {
                 val pid = android.os.Process.myPid()
                 val am = app.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
                 am.runningAppProcesses?.firstOrNull { it.pid == pid }?.processName ?: "unknown"
