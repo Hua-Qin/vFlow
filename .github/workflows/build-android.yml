@@ -139,6 +139,16 @@ jobs:
             ${{ runner.os }}-cxx-arm64-v8a-${{ steps.cache-keys.outputs.native }}-
             ${{ runner.os }}-cxx-arm64-v8a-
 
+      - name: Write local.properties with SDK path
+        shell: bash
+        run: |
+          # AGP on Windows requires sdk.dir in local.properties or ANDROID_HOME env var.
+          # The env var is set but AGP sometimes ignores it; write local.properties to be safe.
+          SDK_PATH="C:\\Users\\runneradmin\\AppData\\Local\\Android\\Sdk"
+          echo "sdk.dir=${SDK_PATH}" > local.properties
+          echo "Written local.properties:"
+          cat local.properties
+
       - name: Install dependencies & build arm64-v8a debug APK
         shell: bash
         run: ./gradlew --stacktrace :app:assembleDebug -Pvflow.abi=arm64-v8a --build-cache --parallel --no-daemon
