@@ -150,7 +150,10 @@ jobs:
             ${{ runner.os }}-cxx-arm64-v8a-
 
       - name: Install dependencies & build arm64-v8a debug APK
-        run: ./gradlew --stacktrace :app:assembleDebug -Pvflow.abi=arm64-v8a
+        # --build-cache  : 显式启用 Gradle 构建缓存（配合 gradle.properties 的 org.gradle.caching=true）
+        # --parallel     : 多模块并行（配合 org.gradle.parallel=true，:app/:core 可并行配置）
+        # --no-daemon    : CI 环境禁用守护进程，避免与 setup-gradle 缓存生命周期冲突
+        run: ./gradlew --stacktrace --build-cache --parallel --no-daemon :app:assembleDebug -Pvflow.abi=arm64-v8a
 
       - name: Upload Android APK artifact
         uses: actions/upload-artifact@v4
