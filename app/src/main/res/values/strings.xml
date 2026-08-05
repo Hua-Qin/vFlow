@@ -12,6 +12,7 @@
     <string name="title_settings">设置</string>
     <string name="chat_placeholder_message">AI 对话功能即将加入。</string>
     <string name="chat_prompt_hint">输入你的问题</string>
+    <string name="chat_agent_working">AI 正在执行…</string>
     <string name="chat_more">更多操作</string>
     <string name="chat_send">发送</string>
     <string name="chat_stop">停止</string>

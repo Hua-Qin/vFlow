@@ -12,6 +12,7 @@
     <string name="title_settings">Settings</string>
     <string name="chat_placeholder_message">AI chat is coming soon.</string>
     <string name="chat_prompt_hint">Ask anything</string>
+    <string name="chat_agent_working">AI is working…</string>
     <string name="chat_more">More actions</string>
     <string name="chat_send">Send</string>
     <string name="chat_stop">Stop</string>

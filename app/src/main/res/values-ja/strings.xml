@@ -11,6 +11,7 @@
     <string name="title_settings">設定</string>
     <string name="chat_placeholder_message">AI会話機能も近々追加される予定だ。</string>
     <string name="chat_prompt_hint">質問を入力してください</string>
+    <string name="chat_agent_working">AI実行中…</string>
     <string name="chat_more">さらなるアクション</string>
     <string name="chat_send">送信</string>
     <string name="chat_stop">停止</string>

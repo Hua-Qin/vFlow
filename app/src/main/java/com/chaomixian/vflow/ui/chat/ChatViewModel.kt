@@ -186,6 +186,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { state -> state.copy(autoApprovalScope = scope) }
     }
 
+    fun cycleAutoApprovalScope() {
+        val next = _uiState.value.autoApprovalScope.next()
+        setAutoApprovalScope(next)
+    }
+
     fun refreshBenchmarkPreflight() {
         val preset = resolveBenchmarkPreset()
         viewModelScope.launch {
