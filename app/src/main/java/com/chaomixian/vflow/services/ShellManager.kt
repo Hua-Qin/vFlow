@@ -30,9 +30,12 @@ import kotlin.coroutines.resumeWithException
 object ShellManager {
     private const val TAG = "vFlowShellManager"
     // MIUI/EMUI 等受限 ROM 首次绑定 Shizuku UserService 时需拉起 :vflow_shizuku 进程，
-    // 3s 远不够（实测常需 5-10s），导致 onServiceConnected 在 3s 内未回调而超时失败。放宽到 15s。
-    private const val BIND_TIMEOUT_MS = 15000L
-    private const val MAX_RETRY_COUNT = 3
+    // Shizuku UserService 绑定超时。8s 足够健康设备拉起 UserService 进程；
+    // 若 8s 内 onServiceConnected 未回调，说明 Shizuku server 侧有问题（UserService
+    // 进程无法 spawn），重试也不会成功，故配合 MAX_RETRY_COUNT=1 仅试一次。
+    // 之前 15s × 3 = 45s，导致权限授予和 Core 启动卡死近一分钟才回退到 Root。
+    private const val BIND_TIMEOUT_MS = 8000L
+    private const val MAX_RETRY_COUNT = 1
     private const val DEPLOY_SUCCESS_MARKER = "__VFLOW_DEPLOY_OK__"
     private val ROOT_SHELL_COMMANDS = arrayOf("su", "-mm", "-c", "sh")
     private val ROOT_SHELL_FALLBACK_COMMANDS = arrayOf("su", "-c", "sh")
@@ -624,9 +627,12 @@ object ShellManager {
             return true
         }
 
+        // 权限相关命令优先用 Root（避免 Shizuku UserService 绑定 8s 超时）
+        val mode = if (isRootAvailable()) ShellMode.ROOT else ShellMode.AUTO
+
         val serviceName = AccessibilityServiceStatus.getServiceId(context)
         // 1. 读取当前已启用的服务列表
-        val currentServices = execShellCommand(context, "settings get secure enabled_accessibility_services")
+        val currentServices = execShellCommand(context, "settings get secure enabled_accessibility_services", mode)
         if (currentServices.startsWith("Error:")) {
             DebugLogger.e(TAG, "读取无障碍服务列表失败: $currentServices")
             return false
@@ -646,14 +652,14 @@ object ShellManager {
         }
 
         // 4. 写回新的服务列表
-        val result = execShellCommand(context, "settings put secure enabled_accessibility_services '$newServices'")
+        val result = execShellCommand(context, "settings put secure enabled_accessibility_services '$newServices'", mode)
         if (result.startsWith("Error:")) {
             DebugLogger.e(TAG, "写入无障碍服务列表失败: $result")
             return false
         }
 
         // 5. 确保无障碍总开关是打开的
-        execShellCommand(context, "settings put secure accessibility_enabled 1")
+        execShellCommand(context, "settings put secure accessibility_enabled 1", mode)
         DebugLogger.d(TAG, "已通过 Shell 尝试启用无障碍服务。")
         return true
     }
@@ -681,9 +687,12 @@ object ShellManager {
             return true
         }
 
+        // 权限相关命令优先用 Root（避免 Shizuku UserService 绑定 8s 超时）
+        val mode = if (isRootAvailable()) ShellMode.ROOT else ShellMode.AUTO
+
         val serviceName = AccessibilityServiceStatus.getServiceId(context)
         // 1. 读取当前服务列表
-        val currentServices = execShellCommand(context, "settings get secure enabled_accessibility_services")
+        val currentServices = execShellCommand(context, "settings get secure enabled_accessibility_services", mode)
         if (currentServices.startsWith("Error:") || currentServices == "null" || currentServices.isBlank()) {
             return true // 列表为空，无需操作
         }
@@ -698,7 +707,7 @@ object ShellManager {
 
         // 3. 写回新的服务列表
         val newServices = serviceList.joinToString(":")
-        val result = execShellCommand(context, "settings put secure enabled_accessibility_services '$newServices'")
+        val result = execShellCommand(context, "settings put secure enabled_accessibility_services '$newServices'", mode)
         if (result.startsWith("Error:")) {
             DebugLogger.e(TAG, "移除无障碍服务失败: $result")
             return false

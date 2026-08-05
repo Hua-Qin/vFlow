@@ -101,18 +101,36 @@ object CoreLauncher {
             val command = buildLaunchCommand(dexFile, logFile, finalMode, context)
 
             // 4. 执行启动命令
-            DebugLogger.d(TAG, "执行启动命令: $command (ShellMode: $finalMode)")
-            val shellMode = finalMode.toShellMode()
+            // 当 finalMode 为 SHIZUKU 时，ShellManager 会先试 Shizuku，失败后回退到 Core/Root。
+            // 但 Core 还没启动（这正是我们在做的事），所以实际会回退到 Root 执行。
+            // Root 执行 SHIZUKU 模式的命令（直接启动，无 vflow_shell_exec 降权）也能工作，
+            // 只是 Core 会以 Root 身份运行而非 Shell——对功能无影响。
+            // 为进一步加速：如果 Root 可用，直接用 Root 模式执行，跳过 Shizuku 8s 超时。
+            val shellMode = if (finalMode == LaunchMode.SHIZUKU && ShellManager.isRootAvailable()) {
+                DebugLogger.d(TAG, "Shizuku 模式但 Root 可用，直接用 Root 执行启动命令（跳过 Shizuku 绑定超时）")
+                ShellManager.ShellMode.ROOT
+            } else {
+                finalMode.toShellMode()
+            }
 
+            DebugLogger.d(TAG, "执行启动命令: $command (ShellMode: $shellMode)")
             val result = ShellManager.execShellCommand(context, command, shellMode)
 
             if (result.startsWith("Error")) {
                 DebugLogger.e(TAG, "vFlowCore 启动命令执行失败: $result")
-                LaunchResult(
-                    success = false,
-                    mode = finalMode,
-                    error = result
-                )
+                // 如果首次执行失败且当前不是 ROOT 模式，尝试用 ROOT 模式重试
+                if (shellMode != ShellManager.ShellMode.ROOT && ShellManager.isRootAvailable()) {
+                    DebugLogger.w(TAG, "首次启动失败，尝试用 ROOT 模式重试...")
+                    val rootCommand = buildLaunchCommand(dexFile, logFile, LaunchMode.ROOT, context)
+                    val rootResult = ShellManager.execShellCommand(context, rootCommand, ShellManager.ShellMode.ROOT)
+                    if (rootResult.startsWith("Error")) {
+                        DebugLogger.e(TAG, "ROOT 模式重试也失败: $rootResult")
+                        return LaunchResult(success = false, mode = LaunchMode.ROOT, error = rootResult)
+                    }
+                    DebugLogger.i(TAG, "ROOT 模式重试成功，等待响应...")
+                } else {
+                    return LaunchResult(success = false, mode = finalMode, error = result)
+                }
             } else {
                 DebugLogger.i(TAG, "vFlowCore 启动命令已发送，正在等待响应...")
                 // 给一点时间让进程启动
