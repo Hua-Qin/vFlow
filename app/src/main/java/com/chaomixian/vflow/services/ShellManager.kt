@@ -203,10 +203,14 @@ object ShellManager {
         }
     }
 
-    // isRootAvailable 结果缓存：避免在短时间内多次触发 su 弹窗或 PermissionDenied
+    // isRootAvailable 结果缓存：避免在短时间内多次触发 su 弹窗或 PermissionDenied。
+    // MIUI 等 ROM 上 su 弹窗有时限，5s 内未点击会被判失败，导致短时间内的重复调用返回假阴性。
+    // 缓存 60s：一旦确认 Root 可用，1 分钟内都视为可用，避免 CoreLauncher/权限授予等关键
+    // 路径因 su 弹窗时限而错误地跳过 Root 回退（结果 Shizuku UserService 绑定又超时，
+    // 导致 Core 启动命令完全无法执行）。
     @Volatile
     private var cachedRootAvailable: Pair<Boolean, Long>? = null
-    private const val ROOT_CACHE_MS = 10_000L
+    private const val ROOT_CACHE_MS = 60_000L
     private const val ROOT_CHECK_TIMEOUT_MS = 5_000L
 
     /**
@@ -407,13 +411,16 @@ object ShellManager {
                         }
                     }
                 }
-                // Core 不可用或也失败了，最后试 Root
-                if (isRootAvailable()) {
-                    val rootResult = executeRootCommand(command)
-                    if (rootResult.success) {
-                        DebugLogger.d(TAG, "回退到 Root 执行成功")
-                        return@withContext rootResult
-                    }
+                // Core 不可用或也失败了，最后试 Root。
+                // 关键：即使 isRootAvailable() 返回 false 也尝试一次——MIUI 上 su 弹窗有时限，
+                // isRootAvailable() 可能因弹窗未及时点击而返回假阴性（缓存过期后）。
+                // executeRootCommand 在 su 真正不可用时会快速 IOException 失败，不会长时间阻塞。
+                // 这解决了「Shizuku UserService 绑定超时 + isRootAvailable() 假阴性」双重失败
+                // 导致权限授予/Core 启动等关键命令完全无法执行的问题。
+                val rootResult = executeRootCommand(command)
+                if (rootResult.success) {
+                    DebugLogger.d(TAG, "回退到 Root 执行成功（isRootAvailable()=${isRootAvailable()}）")
+                    return@withContext rootResult
                 }
                 DebugLogger.w(TAG, "所有回退方式均失败，返回原始 Shizuku 错误")
             }
