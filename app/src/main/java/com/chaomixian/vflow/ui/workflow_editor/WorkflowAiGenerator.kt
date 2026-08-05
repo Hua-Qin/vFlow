@@ -158,6 +158,11 @@ object WorkflowAiGenerator {
     suspend fun generateWorkflow(requirement: String, config: AiConfig): Result<Workflow> {
         return withContext(Dispatchers.IO) {
             try {
+                if (config.apiKey.isBlank()) {
+                    return@withContext Result.failure(
+                        IllegalArgumentException("API Key 为空，请在设置中配置模型 API Key。")
+                    )
+                }
                 val client = OkHttpClient.Builder()
                     .connectTimeout(60, TimeUnit.SECONDS)
                     .readTimeout(120, TimeUnit.SECONDS)

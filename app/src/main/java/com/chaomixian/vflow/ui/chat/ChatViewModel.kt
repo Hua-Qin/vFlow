@@ -362,6 +362,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             _events.tryEmit("请先在设置 -> 模型配置里配置聊天模型。")
             return false
         }
+        if (preset.providerEnum.requiresApiKey && preset.apiKey.isBlank()) {
+            _events.tryEmit("API Key 为空，请在设置 -> 模型配置中填写 ${preset.providerEnum.displayName} 的 API Key。")
+            return false
+        }
 
         val pendingApproval = conversation.pendingToolApprovalMessage()
         if (pendingApproval != null) {
