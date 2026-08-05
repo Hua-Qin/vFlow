@@ -656,12 +656,15 @@ object ShellManager {
      *   导致的 8s 绑定超时）
      * - 命令直接在已运行的 Shizuku server 进程内 fork 执行，延迟低
      *
-     * 局限：
-     * - 需要 Shizuku API v11+（Shizuku App 11.0.0+）
-     * - 返回 null 表示 newProcess 不可用/未授权/执行异常，调用方应回退到 UserService
+     * 实现细节：
+     * - Shizuku API 13.1.5 中 `Shizuku.newProcess()` 是 private static 方法，
+     *   返回 `ShizukuRemoteProcess`（继承自 `java.lang.Process`）。
+     *   通过反射调用 newProcess，结果转型为 Process 即可使用标准 Process API。
+     * - ShizukuRemoteProcess 未实现 `waitFor(long, TimeUnit)`，使用
+     *   `withTimeoutOrNull { process.waitFor() }` + 超时后 `destroy()` 替代。
      *
      * @param command 要执行的命令（支持管道、重定向、后台 & 等复杂 shell 语法）
-     * @return 执行结果；null 表示 newProcess 路径不可用，需回退
+     * @return 执行结果；null 表示 newProcess 路径不可用，需回退到 UserService
      */
     private suspend fun executeShizukuNewProcess(command: String): ShellCommandResult? {
         // 快速检查 Shizuku 是否可用（不阻塞、不弹窗、不绑定服务）
@@ -678,9 +681,24 @@ object ShellManager {
 
         return try {
             DebugLogger.d(TAG, "newProcess: 执行命令: $command")
-            // 用 sh -c 包裹以支持管道、重定向、后台 & 等复杂语法
-            // Shizuku.newProcess 不会自动套 shell，必须显式 sh -c
-            val process = Shizuku.newProcess(arrayOf("sh", "-c", command), null, null)
+
+            // Shizuku.newProcess 是 private static，通过反射调用。
+            // ShizukuRemoteProcess extends java.lang.Process，可安全转型为 Process。
+            val shizukuClass = Class.forName("rikka.shizuku.Shizuku")
+            val newProcessMethod = shizukuClass.getDeclaredMethod(
+                "newProcess",
+                Array<String>::class.java,
+                Array<String>::class.java,
+                String::class.java
+            )
+            newProcessMethod.isAccessible = true
+            val rawProcess = newProcessMethod.invoke(
+                null,
+                arrayOf("sh", "-c", command),
+                null,
+                null
+            ) ?: return null
+            val process = rawProcess as Process
 
             // 判断是否为后台启动类命令（Core 启动脚本以 `&` 结尾或含 nohup）
             // 这类命令的外层 sh 会很快退出（后台子进程已 setsid 分离），给较短超时
@@ -689,7 +707,6 @@ object ShellManager {
             val waitTimeoutMs = if (wantsDetach) 15_000L else 90_000L
 
             // 并行读取 stdout/stderr，避免某一端缓冲写满导致子进程阻塞（死锁）
-            // 用 coroutineScope + async 实现并行读取，与 waitFor 协调
             coroutineScope {
                 val stdoutDeferred = async(Dispatchers.IO) {
                     try {
@@ -708,12 +725,15 @@ object ShellManager {
                     }
                 }
 
-                // waitFor(timeout, unit) 在超时后返回 false 且不会阻塞线程，
-                // 比 withTimeout { process.waitFor() } 更安全（后者取消时 waitFor 仍占线程）
-                val exited = process.waitFor(waitTimeoutMs, TimeUnit.MILLISECONDS)
-                if (!exited) {
+                // ShizukuRemoteProcess 未实现 waitFor(long, TimeUnit)，使用
+                // withTimeoutOrNull 包裹阻塞式 waitFor()；超时后 destroy() 让 waitFor 返回。
+                // 临时占用 IO 线程直到 destroy 生效（通常 < 10ms）。
+                val exitCode: Int? = withTimeoutOrNull(waitTimeoutMs) {
+                    process.waitFor()
+                }
+                if (exitCode == null) {
                     DebugLogger.w(TAG, "newProcess 命令执行超时(${waitTimeoutMs}ms)，销毁子进程: $command")
-                    try { process.destroyForcibly() } catch (_: Exception) {}
+                    try { process.destroy() } catch (_: Exception) {}
                     stdoutDeferred.cancel()
                     stderrDeferred.cancel()
                     return@coroutineScope ShellCommandResult(
@@ -723,7 +743,6 @@ object ShellManager {
                     )
                 }
 
-                val exitCode = process.exitValue()
                 val stdout = stdoutDeferred.await()
                 val stderr = stderrDeferred.await()
 
@@ -751,13 +770,11 @@ object ShellManager {
                 }
             }
         } catch (e: SecurityException) {
-            // Shizuku 权限被拒（理论上 pingBinder+checkSelfPermission 已经过滤，这里兜底）
             DebugLogger.w(TAG, "newProcess: 权限被拒 (${e.message})")
             null
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
-            // newProcess 在 Shizuku server 异常时可能抛 RemoteException/IllegalStateException 等
             DebugLogger.w(
                 TAG,
                 "newProcess 执行失败: ${e.javaClass.simpleName}: ${e.message}"
