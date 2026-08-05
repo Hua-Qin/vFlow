@@ -19,6 +19,7 @@ import kotlinx.coroutines.sync.withLock
 import rikka.shizuku.Shizuku
 import java.io.DataOutputStream
 import java.io.File
+import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -589,9 +590,32 @@ object ShellManager {
     }
 
     /**
-     * 内部 Shizuku 执行逻辑 (保留原有逻辑)
+     * 内部 Shizuku 执行逻辑。
+     *
+     * 优先使用 Shizuku.newProcess()（在 Shizuku server 已有进程内 fork 执行命令），
+     * 失败再回退到 UserService（bindUserService）路径。
+     *
+     * 为什么要优先 newProcess：
+     * - UserService 绑定需要 Shizuku server 拉起 `:vflow_shizuku` 子进程；在 MIUI/EMUI
+     *   等受限 ROM 上经常 spawn 失败，表现为 onServiceConnected 永不回调，8s 超时后
+     *   所有 Shizuku 命令全部失败（权限授予、Core 启动等关键路径全部瘫痪）。
+     * - newProcess 直接在 Shizuku server 已运行的进程内 fork+exec，不依赖拉起新进程，
+     *   不存在绑定超时问题，且延迟更低（省去 IPC binder 往返）。
+     * - 需要 Shizuku API v11+（当前依赖 13.1.5，满足）。
+     *
+     * UserService 路径仍保留，用于：
+     * - newProcess 不可用（旧版 Shizuku）或权限被拒时的回退
+     * - 虚拟屏幕、守护任务等仍需长连接的功能（这些不走 executeShizukuCommand）
      */
     private suspend fun executeShizukuCommand(context: Context, command: String): ShellCommandResult {
+        // 1. 优先 newProcess
+        val newProcessResult = executeShizukuNewProcess(command)
+        if (newProcessResult != null) {
+            return newProcessResult
+        }
+
+        // 2. 回退到 UserService
+        DebugLogger.d(TAG, "newProcess 不可用或失败，回退到 UserService 执行")
         val service = getService(context)
         if (service == null) {
             val status = if (!isShizukuActive(context)) "Shizuku 未激活或未授权" else "服务连接失败"
@@ -621,6 +645,124 @@ object ShellManager {
                 exitCode = -1,
                 success = false
             )
+        }
+    }
+
+    /**
+     * 使用 Shizuku.newProcess() 在 Shizuku server 进程内直接执行 shell 命令。
+     *
+     * 优势：
+     * - 不需要绑定 UserService（避免 MIUI/EMUI 上 `:vflow_shizuku` 进程无法 spawn
+     *   导致的 8s 绑定超时）
+     * - 命令直接在已运行的 Shizuku server 进程内 fork 执行，延迟低
+     *
+     * 局限：
+     * - 需要 Shizuku API v11+（Shizuku App 11.0.0+）
+     * - 返回 null 表示 newProcess 不可用/未授权/执行异常，调用方应回退到 UserService
+     *
+     * @param command 要执行的命令（支持管道、重定向、后台 & 等复杂 shell 语法）
+     * @return 执行结果；null 表示 newProcess 路径不可用，需回退
+     */
+    private suspend fun executeShizukuNewProcess(command: String): ShellCommandResult? {
+        // 快速检查 Shizuku 是否可用（不阻塞、不弹窗、不绑定服务）
+        val ready = try {
+            Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
+        } catch (e: Throwable) {
+            DebugLogger.d(TAG, "newProcess: Shizuku 不可用 (${e.javaClass.simpleName}: ${e.message})")
+            return null
+        }
+        if (!ready) {
+            DebugLogger.d(TAG, "newProcess: Shizuku 未激活或未授权，跳过 newProcess 路径")
+            return null
+        }
+
+        return try {
+            DebugLogger.d(TAG, "newProcess: 执行命令: $command")
+            // 用 sh -c 包裹以支持管道、重定向、后台 & 等复杂语法
+            // Shizuku.newProcess 不会自动套 shell，必须显式 sh -c
+            val process = Shizuku.newProcess(arrayOf("sh", "-c", command), null, null)
+
+            // 判断是否为后台启动类命令（Core 启动脚本以 `&` 结尾或含 nohup）
+            // 这类命令的外层 sh 会很快退出（后台子进程已 setsid 分离），给较短超时
+            val wantsDetach = command.trimEnd().endsWith('&') ||
+                command.contains("nohup ", ignoreCase = true)
+            val waitTimeoutMs = if (wantsDetach) 15_000L else 90_000L
+
+            // 并行读取 stdout/stderr，避免某一端缓冲写满导致子进程阻塞（死锁）
+            // 用 coroutineScope + async 实现并行读取，与 waitFor 协调
+            coroutineScope {
+                val stdoutDeferred = async(Dispatchers.IO) {
+                    try {
+                        process.inputStream.bufferedReader().use { it.readText() }
+                    } catch (e: Exception) {
+                        DebugLogger.d(TAG, "newProcess: 读取 stdout 异常: ${e.message}")
+                        ""
+                    }
+                }
+                val stderrDeferred = async(Dispatchers.IO) {
+                    try {
+                        process.errorStream.bufferedReader().use { it.readText() }
+                    } catch (e: Exception) {
+                        DebugLogger.d(TAG, "newProcess: 读取 stderr 异常: ${e.message}")
+                        ""
+                    }
+                }
+
+                // waitFor(timeout, unit) 在超时后返回 false 且不会阻塞线程，
+                // 比 withTimeout { process.waitFor() } 更安全（后者取消时 waitFor 仍占线程）
+                val exited = process.waitFor(waitTimeoutMs, TimeUnit.MILLISECONDS)
+                if (!exited) {
+                    DebugLogger.w(TAG, "newProcess 命令执行超时(${waitTimeoutMs}ms)，销毁子进程: $command")
+                    try { process.destroyForcibly() } catch (_: Exception) {}
+                    stdoutDeferred.cancel()
+                    stderrDeferred.cancel()
+                    return@coroutineScope ShellCommandResult(
+                        output = "Error: Command timed out",
+                        exitCode = -99,
+                        success = false
+                    )
+                }
+
+                val exitCode = process.exitValue()
+                val stdout = stdoutDeferred.await()
+                val stderr = stderrDeferred.await()
+
+                DebugLogger.d(
+                    TAG,
+                    "newProcess 执行完成: exitCode=$exitCode, " +
+                        "stdout长度=${stdout.length}, stderr长度=${stderr.length}"
+                )
+
+                if (exitCode == 0) {
+                    ShellCommandResult(
+                        output = if (stdout.isNotEmpty()) stdout.trim() else "Success",
+                        exitCode = exitCode,
+                        success = true
+                    )
+                } else {
+                    val msg = if (stderr.isNotBlank()) stderr
+                    else if (stdout.isNotBlank()) stdout
+                    else "Exit code $exitCode"
+                    ShellCommandResult(
+                        output = "Error: ${msg.trim()}",
+                        exitCode = exitCode,
+                        success = false
+                    )
+                }
+            }
+        } catch (e: SecurityException) {
+            // Shizuku 权限被拒（理论上 pingBinder+checkSelfPermission 已经过滤，这里兜底）
+            DebugLogger.w(TAG, "newProcess: 权限被拒 (${e.message})")
+            null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            // newProcess 在 Shizuku server 异常时可能抛 RemoteException/IllegalStateException 等
+            DebugLogger.w(
+                TAG,
+                "newProcess 执行失败: ${e.javaClass.simpleName}: ${e.message}"
+            )
+            null
         }
     }
 
