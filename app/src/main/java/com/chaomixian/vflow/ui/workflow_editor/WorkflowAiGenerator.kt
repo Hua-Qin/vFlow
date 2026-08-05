@@ -35,30 +35,31 @@ object WorkflowAiGenerator {
         sb.append("""
             You are an expert configuration generator for the Android automation app "vFlow".
             Your task is to convert the user's natural language requirement into a valid JSON workflow configuration.
-            
+            You have full knowledge of all locally installed vFlow modules, including built-in modules and any user-installed script modules.
+
             ### JSON Structure Rules
             1. The root object represents a `Workflow`.
             2. `id`: Must be a unique UUID string.
-            3. `name`: A descriptive name for the workflow (in Chinese).
+            3. `name`: A descriptive name for the workflow (in the user's language).
             4. `isEnabled`: Boolean, usually true.
             5. `triggers`: An array of trigger `ActionStep` objects.
             6. `steps`: An array of action `ActionStep` objects.
-            
+
             ### CRITICAL RULE: SEPARATE TRIGGERS AND ACTIONS
-            1. `triggers` MUST contain only modules from the '触发器' category.
+            1. `triggers` MUST contain only modules from the trigger category (IDs starting with `vflow.trigger.`).
             2. `steps` MUST NOT contain any trigger module.
             3. If the user's requirement specifies a trigger (e.g., "when receiving SMS", "at 8:00 AM"), put the corresponding trigger module in `triggers`.
             4. If the user's requirement DOES NOT specify a trigger, you MUST add `vflow.trigger.manual` to `triggers`.
-            
+
             ### ActionStep Structure
             Each item in `triggers` or `steps` has:
-            - `id`: A unique UUID string (Critical: used for variable referencing).
+            - `id`: A unique snake_case string (Critical: used for variable referencing). Use descriptive IDs like "step_click_login", "step_find_text".
             - `moduleId`: The exact ID of the module (see Module Definitions below).
-            - `parameters`: A dictionary of input parameters.
-            
+            - `parameters`: A dictionary of input parameters. Only use parameter keys defined in the module's Inputs.
+
             ### IMPORTANT LOGIC & VARIABLE RULES
             1. **Loop Indices Start at 1**: When using `Loop` ("vflow.logic.loop.start") or `ForEach` ("vflow.logic.foreach.start"), the output variables `loop_index` and `index` **start counting from 1** (1-based), NOT 0. Do not add +1 manually if the user asks for the "first" item.
-            2. **Block Structure**: Every "Start" module (e.g., `If`, `Loop`, `ForEach`, `While`) **MUST** be closed by its corresponding "End" module (e.g., `EndIf`, `EndLoop`, `EndForEach`, `EndWhile`) later in the steps array.
+            2. **Block Structure**: Every "Start" module (e.g., `If`, `Loop`, `ForEach`, `While`) **MUST** be closed by its corresponding "End" module (e.g., `EndIf`, `EndLoop`, `EndForEach`, `EndWhile`) later in the steps array. Use `indentationLevel` to indicate nesting depth (0 for top-level, 1 inside a block, 2 for nested blocks, etc.).
             3. **Input Text**: The `Input Text` module types into the *currently focused* field. Therefore, it is almost always preceded by a `Click` action on the target input field to ensure focus.
             4. **Magic Variables & Property Access**:
                - Basic syntax: `{{STEP_ID.OUTPUT_ID}}` - Use the output of a previous step.
@@ -81,12 +82,13 @@ object WorkflowAiGenerator {
             Step 2: Clicks the element found in Step 1.
             Parameter "target" in Step 2 should be: `{{step_A.first_result}}`
 
-            ### Available Modules (Module Definitions)
+            ### Available Modules (Local Module Registry)
+            Below is the complete list of all modules currently installed on this device, including built-in and user-installed modules.
             You must ONLY use the modules listed below. Pay attention to `moduleId`, `Inputs` (key names and types), and `Outputs` (for referencing).
-            
+
         """.trimIndent())
 
-        // 动态遍历注册表
+        // 动态遍历注册表 - 包含所有本地模块（内置 + 用户安装）
         val allModules = ModuleRegistry.getAllModules()
             .sortedWith(
                 compareBy(
@@ -96,10 +98,9 @@ object WorkflowAiGenerator {
             )
 
         var currentCategory = ""
+        var moduleCount = 0
 
         for (module in allModules) {
-            // if (module.id.startsWith("vflow.ai")) continue
-
             // 阻止 AI 使用模板/Snippet，因为它们不是原子操作
             if (module.metadata.getResolvedCategoryId() == ModuleCategories.TEMPLATE || module.id.contains("snippet")) continue
 
@@ -109,6 +110,7 @@ object WorkflowAiGenerator {
                 sb.append("\n--- Category: $currentCategory ---\n")
             }
 
+            moduleCount++
             sb.append("\n[Module: ${module.metadata.name}]\n")
             sb.append("  - Module ID: \"${module.id}\"\n")
             sb.append("  - Description: ${module.metadata.description}\n")
@@ -140,9 +142,14 @@ object WorkflowAiGenerator {
         }
 
         sb.append("""
-            
+
+            ### Module Summary
+            Total available modules: $moduleCount (excluding templates/snippets).
+            All modules above are locally installed and ready to use. Do not invent module IDs that are not listed above.
+
             ### Output Format
-            Return ONLY valid JSON. No Markdown code blocks.
+            Return ONLY valid JSON. No Markdown code blocks, no explanations.
+            The JSON must be a single Workflow object (not an array).
         """.trimIndent())
 
         return sb.toString()

@@ -83,7 +83,10 @@ data class ChatPresetConfig(
     val useResponsesApi: Boolean = false,
 ) {
     companion object {
-        const val DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant. Keep responses concise and clear."
+        const val DEFAULT_SYSTEM_PROMPT = "You are the vFlow AI assistant, embedded in an Android automation app. " +
+            "You help users create workflows, automate device operations, and answer questions about Android automation. " +
+            "You have access to all vFlow modules (triggers, device actions, logic control, data processing, network, UI interaction, etc.) " +
+            "through the tool system. Keep responses concise and clear. Respond in the user's language."
     }
 
     val providerEnum: ChatProvider
@@ -154,7 +157,8 @@ enum class ChatToolAutoApprovalScope(
 
     companion object {
         fun fromStorage(value: String?): ChatToolAutoApprovalScope {
-            return entries.firstOrNull { it.storageValue == value } ?: OFF
+            // 默认返回 STANDARD，让 AI 执行常规操作时自动批准，无需用户手动点击
+            return entries.firstOrNull { it.storageValue == value } ?: STANDARD
         }
     }
 }

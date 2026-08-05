@@ -60,10 +60,11 @@ class ChatPresetRepository(context: Context) {
         prefs.getString(KEY_CHAT_AUTO_APPROVAL_SCOPE, null)?.let { raw ->
             return ChatToolAutoApprovalScope.fromStorage(raw)
         }
+        // 默认启用 STANDARD 级别的自动批准，让 AI 执行常规操作时无需用户手动确认
         return if (prefs.getBoolean(KEY_CHAT_AUTO_APPROVE_TOOLS, false)) {
             ChatToolAutoApprovalScope.STANDARD
         } else {
-            ChatToolAutoApprovalScope.OFF
+            ChatToolAutoApprovalScope.STANDARD
         }
     }
 

@@ -36,7 +36,7 @@ data class ChatUiState(
     val isAgentRunning: Boolean = false,
     val availableTools: List<ChatAgentToolDefinition> = emptyList(),
     val pendingPermissionRequest: ChatPermissionRequest? = null,
-    val autoApprovalScope: ChatToolAutoApprovalScope = ChatToolAutoApprovalScope.OFF,
+    val autoApprovalScope: ChatToolAutoApprovalScope = ChatToolAutoApprovalScope.STANDARD,
     val queuedPromptCount: Int = 0,
     val isBenchmarkRunning: Boolean = false,
     val benchmarkUi: ChatBenchmarkUiState = ChatBenchmarkUiState(),

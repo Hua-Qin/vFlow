@@ -22,8 +22,8 @@
     <string name="chat_add_photos">Add %1$d photos</string>
     <string name="chat_web_search_title">Web search</string>
     <string name="chat_web_search_description">Find live news and information</string>
-    <string name="chat_auto_approve_title">Auto-approve scope</string>
-    <string name="chat_auto_approve_description">Automatically allow tool actions in this chat.</string>
+    <string name="chat_auto_approve_title">Auto-approve</string>
+    <string name="chat_auto_approve_description">Auto-approve AI tool actions without manual confirmation. Tap to cycle levels.</string>
     <string name="chat_auto_approve_scope_off">Off</string>
     <string name="chat_auto_approve_scope_read_only">Read only</string>
     <string name="chat_auto_approve_scope_low_risk">Low risk</string>

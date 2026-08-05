@@ -22,8 +22,8 @@
     <string name="chat_add_photos">添加 %1$d 张照片</string>
     <string name="chat_web_search_title">网页搜索</string>
     <string name="chat_web_search_description">查找实时新闻和信息</string>
-    <string name="chat_auto_approve_title">自动批准范围</string>
-    <string name="chat_auto_approve_description">为当前对话自动放行工具操作。</string>
+    <string name="chat_auto_approve_title">自动批准</string>
+    <string name="chat_auto_approve_description">AI 执行操作时自动批准，无需手动确认。点击切换级别。</string>
     <string name="chat_auto_approve_scope_off">关闭</string>
     <string name="chat_auto_approve_scope_read_only">仅观察</string>
     <string name="chat_auto_approve_scope_low_risk">低风险</string>
