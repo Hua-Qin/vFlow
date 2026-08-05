@@ -111,9 +111,20 @@ object ShellManager {
         // 启动一个后台协程来执行连接，不阻塞主线程
         scope.launch {
             if (isShizukuActive(context)) {
-                // 调用 getService 来触发带重试的连接逻辑
-                getService(context)
-                DebugLogger.d(TAG, "Shizuku 预连接尝试完成。")
+                // 预连接只是优化：实际命令执行时 getService 会再做完整重试。
+                // 这里只试 1 次（withTimeout 15s），失败也不重试——
+                // 之前 3 次重试 × 15s = 45s 纯浪费，且占用 connectionMutex
+                // 阻塞了真正需要执行命令的 getService 调用。
+                try {
+                    shellService = withTimeoutOrNull(BIND_TIMEOUT_MS) { connect(context) }
+                    if (shellService != null) {
+                        DebugLogger.d(TAG, "Shizuku 预连接成功。")
+                    } else {
+                        DebugLogger.d(TAG, "Shizuku 预连接未成功（1次尝试），跳过；实际命令执行时会重试。")
+                    }
+                } catch (e: Exception) {
+                    DebugLogger.d(TAG, "Shizuku 预连接异常(1次尝试): ${e.message}；实际命令执行时会重试。")
+                }
             } else {
                 DebugLogger.d(TAG, "Shizuku 未激活，跳过预连接。")
             }
@@ -365,12 +376,46 @@ object ShellManager {
             }
 
             // 根据模式分发执行
-            when (finalMode) {
+            val result = when (finalMode) {
                 ShellMode.ROOT -> executeRootCommand(command)
                 ShellMode.CORE -> executeCoreCommand(context, command, VFlowCoreBridge.ExecMode.SHELL)
                 ShellMode.CORE_ROOT -> executeCoreCommand(context, command, VFlowCoreBridge.ExecMode.ROOT)
                 else -> executeShizukuCommand(context, command)
             }
+
+            // 弹性回退：Shizuku 执行失败时（服务绑定超时/连接断开），自动尝试 Core / Root。
+            // 这解决了「Shizuku UserService 绑定 3×15s 超时导致 pm grant 等关键命令
+            // 全部失败、权限永远授予不上」的问题。Core 已在 ROOT 模式运行时尤其有效。
+            if (!result.success && finalMode == ShellMode.SHIZUKU) {
+                DebugLogger.w(TAG, "Shizuku 执行失败(output=${result.output.take(80)}), 尝试回退到 Core/Root...")
+                // 优先用 Core（如果已连接，延迟最低）
+                if (VFlowCoreBridge.isConnected) {
+                    val coreResult = executeCoreCommand(context, command, VFlowCoreBridge.ExecMode.SHELL)
+                    if (coreResult.success) {
+                        DebugLogger.d(TAG, "回退到 Core(SHELL) 执行成功")
+                        return@withContext coreResult
+                    }
+                    // Core SHELL 失败，如果 Core 是 ROOT 模式，再试 ROOT
+                    if (VFlowCoreBridge.privilegeMode == VFlowCoreBridge.PrivilegeMode.ROOT) {
+                        val coreRootResult = executeCoreCommand(context, command, VFlowCoreBridge.ExecMode.ROOT)
+                        if (coreRootResult.success) {
+                            DebugLogger.d(TAG, "回退到 Core(ROOT) 执行成功")
+                            return@withContext coreRootResult
+                        }
+                    }
+                }
+                // Core 不可用或也失败了，最后试 Root
+                if (isRootAvailable()) {
+                    val rootResult = executeRootCommand(command)
+                    if (rootResult.success) {
+                        DebugLogger.d(TAG, "回退到 Root 执行成功")
+                        return@withContext rootResult
+                    }
+                }
+                DebugLogger.w(TAG, "所有回退方式均失败，返回原始 Shizuku 错误")
+            }
+
+            result
         }
     }
 
