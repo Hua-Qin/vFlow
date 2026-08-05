@@ -3,6 +3,9 @@ package com.chaomixian.vflow.ui.main
 import android.content.Context
 import android.text.format.DateFormat
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import androidx.compose.animation.fadeOut
@@ -27,11 +30,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuGroup
@@ -67,11 +72,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation3.runtime.entryProvider
@@ -102,6 +110,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Sort
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 
 internal enum class MainTopLevelTab(
@@ -321,7 +330,7 @@ private fun MainScreen(
                                     backdrop = backdrop,
                                 )
                             } else {
-                                StandardBottomBar(
+                                FolkPatchStyleBottomBar(
                                     selectedTab = selectedTab,
                                     onTabSelected = { mainPagerState.animateToPage(it.ordinal) },
                                 )
@@ -848,25 +857,91 @@ private fun ChatHistorySideSheetItem(
 }
 
 @Composable
-private fun StandardBottomBar(
+private fun FolkPatchStyleBottomBar(
     selectedTab: MainTopLevelTab,
     onTabSelected: (MainTopLevelTab) -> Unit,
 ) {
-    NavigationBar(windowInsets = NavigationBarDefaults.windowInsets) {
-        MainTopLevelTab.entries.forEach { tab ->
-            val selected = selectedTab == tab
-            NavigationBarItem(
-                selected = selected,
-                onClick = { if (!selected) onTabSelected(tab) },
-                alwaysShowLabel = false,
-                icon = {
-                    Icon(
-                        painter = painterResource(if (selected) tab.selectedIconRes else tab.unselectedIconRes),
-                        contentDescription = stringResource(tab.titleRes)
-                    )
-                },
-                label = { Text(stringResource(tab.titleRes), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+    val tabs = MainTopLevelTab.entries
+    val density = LocalDensity.current
+    val itemSize = 56.dp
+    val itemSpacing = 4.dp
+    val containerPadding = 7.dp
+    val barHeight = 72.dp
+
+    val animatedSelectedIndex = remember { Animatable(selectedTab.ordinal.toFloat()) }
+    LaunchedEffect(selectedTab) {
+        animatedSelectedIndex.animateTo(
+            targetValue = selectedTab.ordinal.toFloat(),
+            animationSpec = spring(
+                dampingRatio = Spring.DampingRatioMediumBouncy,
+                stiffness = Spring.StiffnessLow,
             )
+        )
+    }
+
+    val itemSizePx = with(density) { itemSize.toPx() }
+    val itemSpacingPx = with(density) { itemSpacing.toPx() }
+    val indicatorOffset = (itemSizePx + itemSpacingPx) * animatedSelectedIndex.value
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            modifier = Modifier.wrapContentWidth(),
+            shape = MaterialTheme.shapes.large,
+            color = NavigationBarDefaults.containerColor,
+            tonalElevation = 3.dp,
+            shadowElevation = 8.dp
+        ) {
+            Box(
+                modifier = Modifier
+                    .height(barHeight)
+                    .padding(horizontal = containerPadding)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .padding(vertical = 8.dp)
+                        .offset { IntOffset(x = indicatorOffset.toInt(), y = 0) }
+                        .size(itemSize)
+                        .background(
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            shape = CircleShape
+                        )
+                )
+                Row(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalArrangement = Arrangement.spacedBy(itemSpacing),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    tabs.forEach { tab ->
+                        val isSelected = selectedTab == tab
+                        Box(
+                            modifier = Modifier
+                                .size(itemSize)
+                                .clip(CircleShape)
+                                .clickable { if (!isSelected) onTabSelected(tab) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                painter = painterResource(
+                                    if (isSelected) tab.selectedIconRes else tab.unselectedIconRes
+                                ),
+                                contentDescription = stringResource(tab.titleRes),
+                                tint = if (isSelected) {
+                                    MaterialTheme.colorScheme.onSecondaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }

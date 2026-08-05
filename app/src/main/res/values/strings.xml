@@ -90,6 +90,7 @@
     <string name="chat_tool_result_expand">展开</string>
     <string name="chat_tool_result_collapse">收起</string>
     <string name="settings_section_theme">外观</string>
+    <string name="settings_section_theme_desc">动态取色、多彩卡片、液态玻璃导航栏、界面缩放。</string>
     <string name="settings_switch_dynamic_color">动态取色</string>
     <string name="settings_switch_dynamic_color_desc">基于壁纸颜色生成应用外观主题。</string>
     <string name="settings_switch_colorful_workflow_cards">多彩配色 (Beta)</string>
@@ -103,6 +104,7 @@
     <string name="settings_appearance_changed">外观已更改</string>
     <string name="settings_appearance_restart_needed">需要重启应用以应用新的外观设置</string>
     <string name="settings_section_general">通用设置</string>
+    <string name="settings_section_general_desc">模块配置、模型、更新、API、通知、无障碍与运行行为。</string>
     <string name="settings_switch_progress_notification">显示执行进度通知</string>
     <string name="settings_switch_progress_notification_desc">在状态栏显示工作流执行情况。</string>
     <string name="settings_switch_force_keep_alive">强制保活</string>
@@ -152,6 +154,7 @@
     <string name="model_config_empty_models_body">先添加一个模型，这个供应商就能在聊天里直接使用。</string>
 
     <string name="settings_section_debugging">调试</string>
+    <string name="settings_section_debugging_desc">日志、遥测、崩溃报告、诊断与工具。</string>
     <string name="settings_switch_enable_logging">记录调试日志</string>
     <string name="settings_switch_enable_logging_desc">开启后，应用的所有日志将被记录在内存中，直到应用被强制终止。这会略微增加内存占用。</string>
     <string name="settings_switch_enable_telemetry">启用遥测</string>
@@ -183,6 +186,7 @@
     <string name="settings_section_about_desc">查看应用版本、开源许可等信息。</string>
 
     <string name="settings_section_experimental">实验性</string>
+    <string name="settings_section_experimental_desc">实验性功能，可能不稳定。</string>
     <string name="settings_switch_accessibility_disguise">无障碍服务伪装</string>
     <string name="settings_switch_accessibility_disguise_desc">伪装为系统无障碍服务。</string>
     <string name="settings_toast_accessibility_disguise_changed">切换后请重新开启无障碍服务</string>
@@ -410,6 +414,7 @@
     <string name="settings_toast_hide_from_recents_enabled">已开启从最近任务中隐藏</string>
     <string name="settings_toast_hide_from_recents_disabled">已关闭从最近任务中隐藏</string>
     <string name="settings_section_permissions_shell">权限与 Shell</string>
+    <string name="settings_section_permissions_shell_desc">Shell 模式、权限管理器与权限守护。</string>
     <string name="settings_shell_preference">Shell 偏好</string>
     <string name="settings_shell_preference_desc">用于执行截图、Shell 命令等操作</string>
     <string name="settings_btn_shell_shizuku">Shizuku</string>
