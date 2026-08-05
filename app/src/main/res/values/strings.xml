@@ -327,7 +327,7 @@
     <string name="home_core_status_stopped">已停止</string>
     <string name="home_core_mode">模式：%s</string>
     <string name="home_privilege_root">Root</string>
-    <string name="home_privilege_shell">Shell</string>
+    <string name="home_privilege_shell">Shizuku</string>
     <string name="home_privilege_none">无权限</string>
     <string name="home_total_workflows">工作流总数</string>
     <string name="home_auto_tasks">自动化任务</string>

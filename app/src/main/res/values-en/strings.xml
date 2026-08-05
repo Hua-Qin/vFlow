@@ -323,7 +323,7 @@
     <string name="home_core_status_stopped">Stopped</string>
     <string name="home_core_mode">Mode: %s</string>
     <string name="home_privilege_root">Root</string>
-    <string name="home_privilege_shell">Shell</string>
+    <string name="home_privilege_shell">Shizuku</string>
     <string name="home_privilege_none">No Privilege</string>
     <string name="home_total_workflows">Total Workflows</string>
     <string name="home_auto_tasks">Automated Tasks</string>

@@ -106,13 +106,14 @@ object CoreLauncher {
             // 表现为 onServiceConnected 永不回调），而 isRootAvailable() 又可能因 su 弹窗时限
             // 返回假阴性，导致「既不能用 Shizuku 也无法回退 Root」的双重失败，Core 进程根本无法启动。
             //
-            // 解决：SHIZUKU 模式下直接尝试 ROOT 执行——executeRootCommand 在 su 真正不可用时会
-            // 快速 IOException 失败（不阻塞），此时再回退到 SHIZUKU。Root 执行 SHIZUKU 模式的
-            // 命令（直接启动 + setsid，无 vflow_shell_exec 降权）完全可用，Core 以 Root 身份
-            // 运行——对功能无影响，甚至权限更高。
+            // 解决：SHIZUKU 模式下优先尝试 ROOT 执行，但通过 vflow_shell_exec 降权到 shell (uid=2000)，
+            // 确保 Core 进程以 Shell 权限运行（与 Shizuku 模式一致），而非 Root。这样首页模式
+            // 显示正确为 "Shizuku"，且避免 Core 以过高权限运行。
+            // 如果 ROOT 不可用或 vflow_shell_exec 部署失败，回退到 SHIZUKU 直接执行。
             val result = if (finalMode == LaunchMode.SHIZUKU) {
-                DebugLogger.d(TAG, "SHIZUKU 模式：优先尝试 ROOT 执行启动命令（避免 Shizuku UserService 绑定超时）")
-                val rootResult = ShellManager.execShellCommand(context, command, ShellManager.ShellMode.ROOT)
+                DebugLogger.d(TAG, "SHIZUKU 模式：优先尝试 ROOT + vflow_shell_exec 降权执行（避免 Shizuku UserService 绑定超时）")
+                val droppedCommand = buildShizukuViaRootCommand(dexFile, logFile, context)
+                val rootResult = ShellManager.execShellCommand(context, droppedCommand, ShellManager.ShellMode.ROOT)
                 if (!rootResult.startsWith("Error")) {
                     rootResult
                 } else {
@@ -459,6 +460,37 @@ object CoreLauncher {
             // 的进程组，避免执行者退出/被回收时 Core 被一同终止（导致端口 19999 ECONNREFUSED）。
             // 无论最终用 ROOT 还是 SHIZUKU 执行此命令，setsid 都能保证 Core 进程独立存活。
             DebugLogger.d(TAG, "Shell 模式：直接启动（无需降权）")
+            "setsid sh -c 'export CLASSPATH=\"$classpath\"; exec app_process /system/bin $CORE_CLASS --app-package \"$packageName\" $transportArgs' > \"$logPath\" 2>&1 &"
+        }
+    }
+
+    /**
+     * 构建 SHIZUKU 模式通过 ROOT 回退执行时的启动命令。
+     *
+     * 与普通 SHIZUKU 命令不同，此命令使用 vflow_shell_exec 包装 app_process，
+     * 在 ROOT 执行时先降权到 shell (uid=2000) 再启动 Core，
+     * 确保 Core 进程以 Shell 权限运行，而非 Root。
+     */
+    private fun buildShizukuViaRootCommand(
+        dexFile: File,
+        logFile: File,
+        context: Context
+    ): String {
+        val classpath = dexFile.absolutePath
+        val logPath = logFile.absolutePath
+        val packageName = context.packageName
+        val transportArgs = buildTransportArgs(context)
+
+        // 部署 vflow_shell_exec 用于降权
+        val shellLauncher = deployShellLauncher(context)
+
+        return if (shellLauncher != null) {
+            DebugLogger.d(TAG, "SHIZUKU-via-ROOT：使用 vflow_shell_exec 降权到 shell (uid=2000)，path: ${shellLauncher.absolutePath}")
+            // vflow_shell_exec 格式: <vflow_shell_exec> CLASSPATH=<path> app_process /system/bin <MainClass> <args>
+            // 它会先 setuid/setgid 到 2000，再 exec app_process
+            "setsid sh -c 'exec ${shellLauncher.absolutePath} CLASSPATH=\"$classpath\" app_process /system/bin $CORE_CLASS --app-package \"$packageName\" $transportArgs' > \"$logPath\" 2>&1 &"
+        } else {
+            DebugLogger.w(TAG, "SHIZUKU-via-ROOT：vflow_shell_exec 部署失败，回退到直接启动（Core 将以 Root 身份运行）")
             "setsid sh -c 'export CLASSPATH=\"$classpath\"; exec app_process /system/bin $CORE_CLASS --app-package \"$packageName\" $transportArgs' > \"$logPath\" 2>&1 &"
         }
     }

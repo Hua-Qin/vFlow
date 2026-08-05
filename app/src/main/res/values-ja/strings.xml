@@ -307,7 +307,7 @@
     <string name="home_core_status_stopped">停止しました</string>
     <string name="home_core_mode">モード: %s</string>
     <string name="home_privilege_root">Root</string>
-    <string name="home_privilege_shell">Shell</string>
+    <string name="home_privilege_shell">Shizuku</string>
     <string name="home_privilege_none">許可がありません</string>
     <string name="home_total_workflows">ワークフローの総数</string>
     <string name="home_auto_tasks">タスクを自動化する</string>
