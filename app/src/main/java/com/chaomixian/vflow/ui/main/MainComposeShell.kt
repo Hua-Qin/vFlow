@@ -864,13 +864,13 @@ private fun FolkPatchStyleBottomBar(
     val tabs = MainTopLevelTab.entries
     val density = LocalDensity.current
     val itemSize = 52.dp
-    val itemSpacing = 6.dp
-    val containerPadding = 10.dp
-    val barHeight = 68.dp
+    val itemSpacing = 8.dp
+    val barHeight = 64.dp
+    val barPadding = 8.dp
 
-    val animatedSelectedIndex = remember { Animatable(selectedTab.ordinal.toFloat()) }
+    val animatedIndex = remember { Animatable(selectedTab.ordinal.toFloat()) }
     LaunchedEffect(selectedTab) {
-        animatedSelectedIndex.animateTo(
+        animatedIndex.animateTo(
             targetValue = selectedTab.ordinal.toFloat(),
             animationSpec = spring(
                 dampingRatio = Spring.DampingRatioMediumBouncy,
@@ -879,34 +879,35 @@ private fun FolkPatchStyleBottomBar(
         )
     }
 
+    // 计算每个 item 在 Row 中的位置（以 Row 内容起始为原点 x=0）
     val itemSizePx = with(density) { itemSize.toPx() }
     val itemSpacingPx = with(density) { itemSpacing.toPx() }
-    val containerPaddingPx = with(density) { containerPadding.toPx() }
-    val indicatorOffset =
-        containerPaddingPx + (itemSizePx + itemSpacingPx) * animatedSelectedIndex.value
+    // 指示器的 x 偏移 = 选中 index * (itemSize + itemSpacing)，再减去自身与 item 宽度差的一半实现居中
+    // 由于指示器尺寸 = itemSize，无需额外调整；Row 起始 x=0 与 items 对齐
+    val indicatorOffset = (itemSizePx + itemSpacingPx) * animatedIndex.value
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .navigationBarsPadding()
-            .padding(horizontal = 18.dp, vertical = 12.dp),
+            .padding(horizontal = 16.dp, vertical = 10.dp),
         contentAlignment = Alignment.Center
     ) {
         Surface(
-            modifier = Modifier.wrapContentWidth(),
             shape = RoundedCornerShape(100),
             color = NavigationBarDefaults.containerColor,
-            tonalElevation = 3.dp,
-            shadowElevation = 8.dp
+            tonalElevation = 2.dp,
+            shadowElevation = 6.dp
         ) {
             Box(
                 modifier = Modifier
                     .height(barHeight)
-                    .padding(horizontal = containerPadding, vertical = 8.dp)
+                    .padding(horizontal = barPadding)
             ) {
+                // 指示器：与 Row 共享坐标系（x=0 即 Row 首个 item 的左边缘）
                 Box(
                     modifier = Modifier
-                        .fillMaxHeight()
+                        .align(Alignment.CenterStart)
                         .offset { IntOffset(x = indicatorOffset.toInt(), y = 0) }
                         .size(itemSize)
                         .background(
@@ -915,7 +916,9 @@ private fun FolkPatchStyleBottomBar(
                         )
                 )
                 Row(
-                    modifier = Modifier.fillMaxHeight(),
+                    modifier = Modifier
+                        .height(barHeight)
+                        .padding(vertical = (barHeight - itemSize) / 2),
                     horizontalArrangement = Arrangement.spacedBy(itemSpacing),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
