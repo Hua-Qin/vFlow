@@ -742,95 +742,81 @@ fun SettingsScreen(
             }
 
             if (showLanguageSection) item {
-                SettingsSection(title = languageSectionTitle) {
-                    NativeEntryRow(
-                        title = languageTitle,
-                        subtitle = languageSubtitle,
-                        value = uiState.currentLanguage,
-                        icon = Icons.Default.Language,
-                        tone = languageTone(),
-                        position = SettingsGroupPosition.Single,
-                        onClick = actions.onOpenLanguageDialog
-                    )
-                }
+                NativeEntryRow(
+                    title = languageTitle,
+                    subtitle = languageSubtitle,
+                    value = uiState.currentLanguage,
+                    icon = Icons.Default.Language,
+                    tone = languageTone(),
+                    position = SettingsGroupPosition.Single,
+                    onClick = actions.onOpenLanguageDialog
+                )
             }
 
             if (showThemeSection) item {
-                SettingsSection(title = themeSectionTitle) {
-                    NativeEntryRow(
-                        title = themeSectionTitle,
-                        subtitle = themeSectionSubtitle,
-                        icon = Icons.Default.Palette,
-                        tone = cloudTone(),
-                        position = SettingsGroupPosition.Single,
-                        onClick = { selectedSectionName = SettingsSectionType.THEME.name }
-                    )
-                }
+                NativeEntryRow(
+                    title = themeSectionTitle,
+                    subtitle = themeSectionSubtitle,
+                    icon = Icons.Default.Palette,
+                    tone = cloudTone(),
+                    position = SettingsGroupPosition.Single,
+                    onClick = { selectedSectionName = SettingsSectionType.THEME.name }
+                )
             }
 
             if (showGeneralSection) item {
-                SettingsSection(title = generalSectionTitle) {
-                    NativeEntryRow(
-                        title = generalSectionTitle,
-                        subtitle = generalSectionSubtitle,
-                        icon = Icons.Default.Settings,
-                        tone = paletteTone(),
-                        position = SettingsGroupPosition.Single,
-                        onClick = { selectedSectionName = SettingsSectionType.GENERAL.name }
-                    )
-                }
+                NativeEntryRow(
+                    title = generalSectionTitle,
+                    subtitle = generalSectionSubtitle,
+                    icon = Icons.Default.Settings,
+                    tone = paletteTone(),
+                    position = SettingsGroupPosition.Single,
+                    onClick = { selectedSectionName = SettingsSectionType.GENERAL.name }
+                )
             }
 
             if (showPermissionsSection) item {
-                SettingsSection(title = permissionsSectionTitle) {
-                    NativeEntryRow(
-                        title = permissionsSectionTitle,
-                        subtitle = permissionsSectionSubtitle,
-                        icon = Icons.Default.Security,
-                        tone = warningTone(),
-                        position = SettingsGroupPosition.Single,
-                        onClick = { selectedSectionName = SettingsSectionType.PERMISSIONS.name }
-                    )
-                }
+                NativeEntryRow(
+                    title = permissionsSectionTitle,
+                    subtitle = permissionsSectionSubtitle,
+                    icon = Icons.Default.Security,
+                    tone = warningTone(),
+                    position = SettingsGroupPosition.Single,
+                    onClick = { selectedSectionName = SettingsSectionType.PERMISSIONS.name }
+                )
             }
 
             if (showExperimentalSection) item {
-                SettingsSection(title = experimentalSectionTitle) {
-                    NativeEntryRow(
-                        title = experimentalSectionTitle,
-                        subtitle = experimentalSectionSubtitle,
-                        icon = Icons.Default.AccessibilityNew,
-                        tone = softTone(),
-                        position = SettingsGroupPosition.Single,
-                        onClick = { selectedSectionName = SettingsSectionType.EXPERIMENTAL.name }
-                    )
-                }
+                NativeEntryRow(
+                    title = experimentalSectionTitle,
+                    subtitle = experimentalSectionSubtitle,
+                    icon = Icons.Default.AccessibilityNew,
+                    tone = softTone(),
+                    position = SettingsGroupPosition.Single,
+                    onClick = { selectedSectionName = SettingsSectionType.EXPERIMENTAL.name }
+                )
             }
 
             if (showDebuggingSection) item {
-                SettingsSection(title = debuggingSectionTitle) {
-                    NativeEntryRow(
-                        title = debuggingSectionTitle,
-                        subtitle = debuggingSectionSubtitle,
-                        icon = Icons.Default.BugReport,
-                        tone = accentTone(),
-                        position = SettingsGroupPosition.Single,
-                        onClick = { selectedSectionName = SettingsSectionType.DEBUGGING.name }
-                    )
-                }
+                NativeEntryRow(
+                    title = debuggingSectionTitle,
+                    subtitle = debuggingSectionSubtitle,
+                    icon = Icons.Default.BugReport,
+                    tone = accentTone(),
+                    position = SettingsGroupPosition.Single,
+                    onClick = { selectedSectionName = SettingsSectionType.DEBUGGING.name }
+                )
             }
 
             if (showAboutSection) item {
-                SettingsSection(title = aboutSectionTitle) {
-                    NativeEntryRow(
-                        title = aboutTitle,
-                        subtitle = aboutSubtitle,
-                        icon = Icons.Default.Info,
-                        tone = neutralTone(),
-                        position = SettingsGroupPosition.Single,
-                        onClick = actions.onOpenAbout
-                    )
-                }
+                NativeEntryRow(
+                    title = aboutTitle,
+                    subtitle = aboutSubtitle,
+                    icon = Icons.Default.Info,
+                    tone = neutralTone(),
+                    position = SettingsGroupPosition.Single,
+                    onClick = actions.onOpenAbout
+                )
             }
         }
     }

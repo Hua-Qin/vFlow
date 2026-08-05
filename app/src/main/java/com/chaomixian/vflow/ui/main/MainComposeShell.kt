@@ -863,10 +863,10 @@ private fun FolkPatchStyleBottomBar(
 ) {
     val tabs = MainTopLevelTab.entries
     val density = LocalDensity.current
-    val itemSize = 56.dp
-    val itemSpacing = 4.dp
-    val containerPadding = 7.dp
-    val barHeight = 72.dp
+    val itemSize = 52.dp
+    val itemSpacing = 6.dp
+    val containerPadding = 10.dp
+    val barHeight = 68.dp
 
     val animatedSelectedIndex = remember { Animatable(selectedTab.ordinal.toFloat()) }
     LaunchedEffect(selectedTab) {
@@ -881,18 +881,20 @@ private fun FolkPatchStyleBottomBar(
 
     val itemSizePx = with(density) { itemSize.toPx() }
     val itemSpacingPx = with(density) { itemSpacing.toPx() }
-    val indicatorOffset = (itemSizePx + itemSpacingPx) * animatedSelectedIndex.value
+    val containerPaddingPx = with(density) { containerPadding.toPx() }
+    val indicatorOffset =
+        containerPaddingPx + (itemSizePx + itemSpacingPx) * animatedSelectedIndex.value
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .navigationBarsPadding()
-            .padding(horizontal = 16.dp, vertical = 14.dp),
+            .padding(horizontal = 18.dp, vertical = 12.dp),
         contentAlignment = Alignment.Center
     ) {
         Surface(
             modifier = Modifier.wrapContentWidth(),
-            shape = MaterialTheme.shapes.large,
+            shape = RoundedCornerShape(100),
             color = NavigationBarDefaults.containerColor,
             tonalElevation = 3.dp,
             shadowElevation = 8.dp
@@ -900,12 +902,11 @@ private fun FolkPatchStyleBottomBar(
             Box(
                 modifier = Modifier
                     .height(barHeight)
-                    .padding(horizontal = containerPadding)
+                    .padding(horizontal = containerPadding, vertical = 8.dp)
             ) {
                 Box(
                     modifier = Modifier
                         .fillMaxHeight()
-                        .padding(vertical = 8.dp)
                         .offset { IntOffset(x = indicatorOffset.toInt(), y = 0) }
                         .size(itemSize)
                         .background(
@@ -914,7 +915,7 @@ private fun FolkPatchStyleBottomBar(
                         )
                 )
                 Row(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxHeight(),
                     horizontalArrangement = Arrangement.spacedBy(itemSpacing),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
