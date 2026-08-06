@@ -36,6 +36,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # 优先使用用户配置的 GH_PAT（更高 API 配额/跨仓库访问），
+          # 未配置时自动回退到 workflow 自带的 GITHUB_TOKEN。
+          token: ${{ secrets.GH_PAT || github.token }}
+          submodules: recursive
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -178,4 +183,4 @@ jobs:
           path: app/build/outputs/apk/**/*.apk
           if-no-files-found: error
           retention-days: 14
-          compression-level: 6
+          compression-level: 9
