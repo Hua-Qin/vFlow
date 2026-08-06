@@ -88,12 +88,24 @@ class ShizukuUserService(private val context: Context) : IShizukuUserService.Stu
 
             // 判断调用方是否想「后台启动一个长期存在的进程」(典型：Core 启动脚本以 `&` 结尾或含 `nohup`)。
             // 这类命令如果在 ProcessBuilder 里同步 waitFor()，sh 会等到后台子进程的管道 EOF /
-            // 作业状态稳定才返回，容易卡 10s+；于是改用 setsid + </dev/null >/dev/null 2>&1 &
-            // 让后代与当前 sh 会话完全脱钩，sh 立刻退出，waitFor() 很快返回。
+            // 作业状态稳定才返回，容易卡 10s+。
+            //
+            // 关键修复：必须用 setsid 创建新会话，否则后台进程仍在 Shizuku UserService 的进程组中，
+            // UserService 被回收时整个进程组一起被杀（Core 启动后秒死、端口 19999 永远 ECONNREFUSED）。
+            // 之前的 disown 方案在 Android mksh/toybox sh 上不可靠，且 disown 只移除作业表条目，
+            // 并不改变进程组归属。
             val wantsDetach =
                 command.trimEnd().endsWith('&') || command.contains("nohup ", ignoreCase = true)
             val finalCmd = if (wantsDetach) {
-                "($command) </dev/null >/dev/null 2>&1 & disown ; echo DETACHED"
+                // 去掉命令末尾的 &，由 setsid + 外层 & 统一管理后台化。
+                //
+                // 关键：不能再用 `setsid sh -c '$stripped'` 包裹 —— CoreLauncher 生成的命令
+                // 本身就含单引号（sh -c '...'），外层单引号会被内层单引号提前闭合，导致命令
+                // 被截断/拼错，Core 进程静默启动失败、端口 19999 永远 ECONNREFUSED。
+                // 正确做法：直接在 stripped 前面加 setsid，保留命令原有的 sh -c '...' 和重定向，
+                // 仅追加 </dev/null 防止后台进程阻塞在 stdin 上。
+                val stripped = command.trimEnd().removeSuffix("&").trim()
+                "setsid $stripped </dev/null & echo DETACHED"
             } else {
                 command
             }

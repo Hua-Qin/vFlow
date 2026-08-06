@@ -1,6 +1,13 @@
 package com.chaomixian.vflow.ui.settings
 
 import android.os.Build
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.clickable
@@ -11,6 +18,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -20,6 +28,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Dataset
 import androidx.compose.material.icons.filled.AccessibilityNew
@@ -134,6 +143,14 @@ private enum class SettingsGroupPosition {
     Bottom
 }
 
+enum class SettingsSectionType {
+    THEME,
+    GENERAL,
+    PERMISSIONS,
+    EXPERIMENTAL,
+    DEBUGGING
+}
+
 @Composable
 fun SettingsScreen(
     uiState: SettingsUiState,
@@ -147,11 +164,16 @@ fun SettingsScreen(
 
     val languageSectionTitle = stringResource(R.string.settings_section_language)
     val themeSectionTitle = stringResource(R.string.settings_section_theme)
+    val themeSectionSubtitle = stringResource(R.string.settings_section_theme_desc)
     val generalSectionTitle = stringResource(R.string.settings_section_general)
+    val generalSectionSubtitle = stringResource(R.string.settings_section_general_desc)
     val permissionsSectionTitle = stringResource(R.string.settings_section_permissions_shell)
+    val permissionsSectionSubtitle = stringResource(R.string.settings_section_permissions_shell_desc)
     val debuggingSectionTitle = stringResource(R.string.settings_section_debugging)
+    val debuggingSectionSubtitle = stringResource(R.string.settings_section_debugging_desc)
     val aboutSectionTitle = stringResource(R.string.settings_section_about)
     val experimentalSectionTitle = stringResource(R.string.settings_section_experimental)
+    val experimentalSectionSubtitle = stringResource(R.string.settings_section_experimental_desc)
     val accessibilityDisguiseTitle = stringResource(R.string.settings_switch_accessibility_disguise)
     val accessibilityDisguiseSubtitle = stringResource(R.string.settings_switch_accessibility_disguise_desc)
 
@@ -277,10 +299,10 @@ fun SettingsScreen(
         colorfulCardsTitle, colorfulCardsSubtitle,
         liquidGlassTitle, liquidGlassSubtitle,
         appScaleTitle, appScaleSubtitle, appScaleValueLabel,
-        themeSectionTitle
+        themeSectionTitle, themeSectionSubtitle
     ).any { matchesSearch(normalizedQuery, it) }
     val showGeneralSection = listOf(
-        generalSectionTitle,
+        generalSectionTitle, generalSectionSubtitle,
         moduleConfigTitle, moduleConfigSubtitle,
         modelConfigTitle, modelConfigSubtitle,
         autoCheckUpdatesTitle, autoCheckUpdatesSubtitle,
@@ -301,13 +323,13 @@ fun SettingsScreen(
         retryIntervalLabel, retryIntervalValueLabel
     ).any { matchesSearch(normalizedQuery, it) }
     val showPermissionsSection = listOf(
-        permissionsSectionTitle,
+        permissionsSectionTitle, permissionsSectionSubtitle,
         shellPreferenceTitle, shellPreferenceSubtitle, shellShizukuLabel, shellRootLabel,
         permissionManagerTitle, permissionManagerSubtitle,
         permissionGuardianTitle, permissionGuardianSubtitle
     ).any { matchesSearch(normalizedQuery, it) }
     val showDebuggingSection = listOf(
-        debuggingSectionTitle,
+        debuggingSectionTitle, debuggingSectionSubtitle,
         loggingTitle, loggingSubtitle, loggingInfo,
         telemetryTitle, telemetrySubtitle, telemetryInfo,
         crashReportsTitle, crashReportsSubtitle,
@@ -321,389 +343,537 @@ fun SettingsScreen(
         aboutTitle,
         aboutSubtitle
     )
-    val showExperimentalSection = matchesSearch(
-        normalizedQuery,
-        experimentalSectionTitle,
-        accessibilityDisguiseTitle,
-        accessibilityDisguiseSubtitle
-    )
+    val showExperimentalSection = listOf(
+        experimentalSectionTitle, experimentalSectionSubtitle,
+        accessibilityDisguiseTitle, accessibilityDisguiseSubtitle
+    ).any { matchesSearch(normalizedQuery, it) }
     val hasSearchResults = showUpdateCard || showLanguageSection || showThemeSection ||
         showGeneralSection || showPermissionsSection || showExperimentalSection ||
         showDebuggingSection || showAboutSection
 
-    LazyColumn(
-        modifier = modifier.pointerInput(Unit) {
-            detectTapGestures { focusManager.clearFocus() }
-        },
-        contentPadding = PaddingValues(
-            start = 16.dp,
-            top = 12.dp,
-            end = 16.dp,
-            bottom = 8.dp + extraBottomContentPadding
-        ),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        item {
-            SearchBarCard(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                placeholderRes = R.string.settings_search_placeholder,
-                clearContentDescriptionRes = R.string.settings_search_clear,
-                onClearFocus = { focusManager.clearFocus() }
-            )
-        }
+    var selectedSectionName by rememberSaveable { mutableStateOf<String?>(null) }
+    val selectedSection = selectedSectionName?.let {
+        runCatching { SettingsSectionType.valueOf(it) }.getOrNull()
+    }
+    BackHandler(enabled = selectedSection != null) { selectedSectionName = null }
 
-        if (!hasSearchResults) {
-            item {
-                SearchEmptyStateCard(
-                    titleRes = R.string.settings_search_no_results,
-                    hintRes = R.string.settings_search_no_results_hint
+    val section = selectedSection
+    Box(modifier = modifier.fillMaxSize()) {
+        AnimatedVisibility(
+            visible = section == null,
+            enter = fadeIn(animationSpec = tween(durationMillis = 180)) +
+                slideInHorizontally(
+                    animationSpec = tween(durationMillis = 220),
+                    initialOffsetX = { -it / 5 }
+                ),
+            exit = fadeOut(animationSpec = tween(durationMillis = 150)) +
+                slideOutHorizontally(
+                    animationSpec = tween(durationMillis = 180),
+                    targetOffsetX = { -it / 5 }
                 )
+        ) {
+            // 一级页面
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures { focusManager.clearFocus() }
+                    },
+                contentPadding = PaddingValues(
+                    start = 16.dp,
+                    top = 12.dp,
+                    end = 16.dp,
+                    bottom = 8.dp + extraBottomContentPadding
+                ),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                item {
+                    SearchBarCard(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        placeholderRes = R.string.settings_search_placeholder,
+                        clearContentDescriptionRes = R.string.settings_search_clear,
+                        onClearFocus = { focusManager.clearFocus() }
+                    )
+                }
+
+                if (!hasSearchResults) {
+                    item {
+                        SearchEmptyStateCard(
+                            titleRes = R.string.settings_search_no_results,
+                            hintRes = R.string.settings_search_no_results_hint
+                        )
+                    }
+                }
+
+                if (showUpdateCard) {
+                    item {
+                        UpdateCard(
+                            versionLabel = updateVersionLabel.orEmpty(),
+                            onClick = actions.onOpenUpdatePage
+                        )
+                    }
+                }
+
+                if (showLanguageSection) item {
+                    NativeEntryRow(
+                        title = languageTitle,
+                        subtitle = languageSubtitle,
+                        value = uiState.currentLanguage,
+                        icon = Icons.Default.Language,
+                        tone = languageTone(),
+                        position = SettingsGroupPosition.Single,
+                        onClick = actions.onOpenLanguageDialog
+                    )
+                }
+
+                if (showThemeSection) item {
+                    NativeEntryRow(
+                        title = themeSectionTitle,
+                        subtitle = themeSectionSubtitle,
+                        icon = Icons.Default.Palette,
+                        tone = cloudTone(),
+                        position = SettingsGroupPosition.Single,
+                        onClick = { selectedSectionName = SettingsSectionType.THEME.name }
+                    )
+                }
+
+                if (showGeneralSection) item {
+                    NativeEntryRow(
+                        title = generalSectionTitle,
+                        subtitle = generalSectionSubtitle,
+                        icon = Icons.Default.Settings,
+                        tone = paletteTone(),
+                        position = SettingsGroupPosition.Single,
+                        onClick = { selectedSectionName = SettingsSectionType.GENERAL.name }
+                    )
+                }
+
+                if (showPermissionsSection) item {
+                    NativeEntryRow(
+                        title = permissionsSectionTitle,
+                        subtitle = permissionsSectionSubtitle,
+                        icon = Icons.Default.Security,
+                        tone = warningTone(),
+                        position = SettingsGroupPosition.Single,
+                        onClick = { selectedSectionName = SettingsSectionType.PERMISSIONS.name }
+                    )
+                }
+
+                if (showExperimentalSection) item {
+                    NativeEntryRow(
+                        title = experimentalSectionTitle,
+                        subtitle = experimentalSectionSubtitle,
+                        icon = Icons.Default.AccessibilityNew,
+                        tone = softTone(),
+                        position = SettingsGroupPosition.Single,
+                        onClick = { selectedSectionName = SettingsSectionType.EXPERIMENTAL.name }
+                    )
+                }
+
+                if (showDebuggingSection) item {
+                    NativeEntryRow(
+                        title = debuggingSectionTitle,
+                        subtitle = debuggingSectionSubtitle,
+                        icon = Icons.Default.BugReport,
+                        tone = accentTone(),
+                        position = SettingsGroupPosition.Single,
+                        onClick = { selectedSectionName = SettingsSectionType.DEBUGGING.name }
+                    )
+                }
+
+                if (showAboutSection) item {
+                    NativeEntryRow(
+                        title = aboutTitle,
+                        subtitle = aboutSubtitle,
+                        icon = Icons.Default.Info,
+                        tone = neutralTone(),
+                        position = SettingsGroupPosition.Single,
+                        onClick = actions.onOpenAbout
+                    )
+                }
             }
         }
 
-        if (showUpdateCard) {
-            item {
-                UpdateCard(
-                    versionLabel = updateVersionLabel.orEmpty(),
-                    onClick = actions.onOpenUpdatePage
+        AnimatedVisibility(
+            visible = section != null,
+            enter = fadeIn(animationSpec = tween(durationMillis = 200)) +
+                slideInHorizontally(
+                    animationSpec = tween(durationMillis = 240),
+                    initialOffsetX = { it / 4 }
+                ),
+            exit = fadeOut(animationSpec = tween(durationMillis = 160)) +
+                slideOutHorizontally(
+                    animationSpec = tween(durationMillis = 200),
+                    targetOffsetX = { it / 4 }
                 )
-            }
-        }
+        ) {
+            if (section != null) {
+                val sectionHeaderTitle = when (section) {
+                    SettingsSectionType.THEME -> themeSectionTitle
+                    SettingsSectionType.GENERAL -> generalSectionTitle
+                    SettingsSectionType.PERMISSIONS -> permissionsSectionTitle
+                    SettingsSectionType.EXPERIMENTAL -> experimentalSectionTitle
+                    SettingsSectionType.DEBUGGING -> debuggingSectionTitle
+                }
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(Unit) {
+                            detectTapGestures { focusManager.clearFocus() }
+                        },
+                    contentPadding = PaddingValues(
+                        start = 16.dp,
+                        top = 8.dp,
+                        end = 16.dp,
+                        bottom = 8.dp + extraBottomContentPadding
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(onClick = { selectedSectionName = null }) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = stringResource(R.string.action_back)
+                                )
+                            }
+                            Text(
+                                text = sectionHeaderTitle,
+                                style = MaterialTheme.typography.titleLarge,
+                                modifier = Modifier.padding(start = 8.dp)
+                            )
+                        }
+                    }
+                    when (section) {
+                        SettingsSectionType.THEME -> item {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                NativeSwitchRow(
+                                    title = dynamicColorTitle,
+                                    subtitle = dynamicColorSubtitle,
+                                    icon = Icons.Default.Palette,
+                                    tone = cloudTone(),
+                                    position = SettingsGroupPosition.Top,
+                                    checked = uiState.dynamicColorEnabled,
+                                    onCheckedChange = actions.onSetDynamicColorEnabled
+                                )
+                                NativeSwitchRow(
+                                    title = colorfulCardsTitle,
+                                    subtitle = colorfulCardsSubtitle,
+                                    icon = Icons.Default.AutoAwesome,
+                                    tone = accentTone(),
+                                    position = SettingsGroupPosition.Middle,
+                                    checked = uiState.colorfulWorkflowCardsEnabled,
+                                    onCheckedChange = actions.onSetColorfulWorkflowCardsEnabled
+                                )
+                                NativeSwitchRow(
+                                    title = liquidGlassTitle,
+                                    subtitle = liquidGlassSubtitle,
+                                    icon = Icons.Default.BlurOn,
+                                    tone = softTone(),
+                                    checked = uiState.liquidGlassNavBarEnabled,
+                                    position = SettingsGroupPosition.Middle,
+                                    enabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S,
+                                    onCheckedChange = actions.onSetLiquidGlassNavBarEnabled
+                                )
+                                NativeSliderRow(
+                                    title = appScaleTitle,
+                                    subtitle = appScaleSubtitle,
+                                    icon = Icons.Default.Tune,
+                                    tone = warningTone(),
+                                    position = SettingsGroupPosition.Bottom,
+                                    valueLabel = appScaleValueLabel,
+                                    initialSliderValue = uiState.appScale * 100f,
+                                    onScaleChange = actions.onSetAppScale
+                                )
+                            }
+                        }
 
-        if (showLanguageSection) item {
-            SettingsSection(title = languageSectionTitle) {
-                NativeEntryRow(
-                    title = languageTitle,
-                    subtitle = languageSubtitle,
-                    value = uiState.currentLanguage,
-                    icon = Icons.Default.Language,
-                    tone = languageTone(),
-                    position = SettingsGroupPosition.Single,
-                    onClick = actions.onOpenLanguageDialog
-                )
-            }
-        }
+                        SettingsSectionType.GENERAL -> item {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                NativeEntryRow(
+                                    title = moduleConfigTitle,
+                                    subtitle = moduleConfigSubtitle,
+                                    icon = Icons.Default.Settings,
+                                    tone = paletteTone(),
+                                    position = SettingsGroupPosition.Top,
+                                    onClick = actions.onOpenModuleConfig
+                                )
+                                NativeEntryRow(
+                                    title = globalVariablesTitle,
+                                    subtitle = globalVariablesSubtitle,
+                                    icon = Icons.Filled.Dataset,
+                                    tone = paletteTone(),
+                                    position = SettingsGroupPosition.Middle,
+                                    onClick = actions.onOpenGlobalVariables
+                                )
+                                NativeEntryRow(
+                                    title = modelConfigTitle,
+                                    subtitle = modelConfigSubtitle,
+                                    icon = Icons.Default.AutoAwesome,
+                                    tone = paletteTone(),
+                                    position = SettingsGroupPosition.Middle,
+                                    onClick = actions.onOpenModelConfig
+                                )
+                                NativeSwitchRow(
+                                    title = autoCheckUpdatesTitle,
+                                    subtitle = autoCheckUpdatesSubtitle,
+                                    icon = Icons.Default.SystemUpdate,
+                                    tone = warmTone(),
+                                    position = SettingsGroupPosition.Middle,
+                                    checked = uiState.autoCheckUpdatesEnabled,
+                                    onCheckedChange = actions.onSetAutoCheckUpdatesEnabled
+                                )
+                                NativeSwitchRow(
+                                    title = lockScreenTitle,
+                                    subtitle = lockScreenSubtitle,
+                                    icon = Icons.Default.Lock,
+                                    tone = warmTone(),
+                                    position = SettingsGroupPosition.Middle,
+                                    checked = uiState.allowShowOnLockScreen,
+                                    onCheckedChange = actions.onSetAllowShowOnLockScreen
+                                )
+                                NativeSwitchRow(
+                                    title = apiEnabledTitle,
+                                    subtitle = apiEnabledSubtitle,
+                                    icon = Icons.Default.Cloud,
+                                    tone = cloudTone(),
+                                    position = SettingsGroupPosition.Middle,
+                                    checked = uiState.apiRunning,
+                                    onCheckedChange = actions.onSetApiEnabled
+                                )
+                                NativeEntryRow(
+                                    title = apiSettingsTitle,
+                                    subtitle = apiSettingsSubtitle,
+                                    value = apiStatusValue,
+                                    icon = Icons.Default.Cloud,
+                                    tone = cloudTone(),
+                                    position = SettingsGroupPosition.Middle,
+                                    onClick = actions.onOpenApiSettings
+                                )
+                                NativeSwitchRow(
+                                    title = progressNotificationTitle,
+                                    subtitle = progressNotificationSubtitle,
+                                    icon = Icons.Default.Notifications,
+                                    tone = accentTone(),
+                                    position = SettingsGroupPosition.Middle,
+                                    checked = uiState.progressNotificationEnabled,
+                                    onCheckedChange = actions.onSetProgressNotificationEnabled
+                                )
+                                NativeSwitchRow(
+                                    title = backgroundServiceTitle,
+                                    subtitle = backgroundServiceSubtitle,
+                                    icon = Icons.Default.Notifications,
+                                    tone = accentTone(),
+                                    position = SettingsGroupPosition.Middle,
+                                    checked = uiState.backgroundServiceNotificationEnabled,
+                                    onCheckedChange = actions.onSetBackgroundServiceNotificationEnabled,
+                                    infoText = backgroundServiceInfo
+                                )
+                                NativeSwitchRow(
+                                    title = forceKeepAliveTitle,
+                                    subtitle = forceKeepAliveSubtitle,
+                                    icon = Icons.Default.Security,
+                                    tone = warningTone(),
+                                    position = SettingsGroupPosition.Middle,
+                                    checked = uiState.forceKeepAliveEnabled,
+                                    onCheckedChange = actions.onSetForceKeepAliveEnabled,
+                                    infoText = forceKeepAliveInfo
+                                )
+                                NativeSwitchRow(
+                                    title = autoAccessibilityTitle,
+                                    subtitle = autoAccessibilitySubtitle,
+                                    icon = Icons.Default.Security,
+                                    tone = warningTone(),
+                                    position = SettingsGroupPosition.Middle,
+                                    checked = (uiState.isShizukuActive || uiState.isRootAvailable) &&
+                                        uiState.autoEnableAccessibility,
+                                    enabled = uiState.isShizukuActive || uiState.isRootAvailable,
+                                    onCheckedChange = actions.onSetAutoEnableAccessibility,
+                                    infoText = autoAccessibilityInfo
+                                )
+                                NativeSwitchRow(
+                                    title = typeFilterTitle,
+                                    subtitle = typeFilterSubtitle,
+                                    icon = Icons.Default.Tune,
+                                    tone = languageTone(),
+                                    position = SettingsGroupPosition.Middle,
+                                    checked = uiState.enableTypeFilter,
+                                    onCheckedChange = actions.onSetEnableTypeFilter,
+                                    infoText = typeFilterInfo
+                                )
+                                NativeSwitchRow(
+                                    title = popupKeepScreenOnTitle,
+                                    subtitle = popupKeepScreenOnSubtitle,
+                                    icon = Icons.Default.Lock,
+                                    tone = languageTone(),
+                                    position = SettingsGroupPosition.Middle,
+                                    checked = uiState.allowPopupKeepScreenOn,
+                                    onCheckedChange = actions.onSetAllowPopupKeepScreenOn,
+                                    infoText = popupKeepScreenOnInfo
+                                )
+                                NativeSwitchRow(
+                                    title = workflowKeepAwakeTitle,
+                                    subtitle = workflowKeepAwakeSubtitle,
+                                    icon = Icons.Default.BedtimeOff,
+                                    tone = languageTone(),
+                                    position = SettingsGroupPosition.Middle,
+                                    checked = uiState.keepDeviceAwakeDuringWorkflow,
+                                    onCheckedChange = actions.onSetKeepDeviceAwakeDuringWorkflow,
+                                    infoText = workflowKeepAwakeInfo
+                                )
+                                NativeSwitchRow(
+                                    title = hideRecentsTitle,
+                                    subtitle = hideRecentsSubtitle,
+                                    icon = Icons.Default.VisibilityOff,
+                                    tone = languageTone(),
+                                    position = SettingsGroupPosition.Middle,
+                                    checked = uiState.hideFromRecents,
+                                    onCheckedChange = actions.onSetHideFromRecents
+                                )
+                                DefaultErrorPolicyRow(
+                                    title = defaultErrorStrategyTitle,
+                                    subtitle = defaultErrorStrategySubtitle,
+                                    icon = Icons.Default.BugReport,
+                                    tone = languageTone(),
+                                    position = SettingsGroupPosition.Bottom,
+                                    policy = uiState.defaultErrorPolicy,
+                                    retryCount = uiState.defaultRetryCount,
+                                    retryIntervalMillis = uiState.defaultRetryIntervalMillis,
+                                    stopLabel = errorPolicyStopLabel,
+                                    skipLabel = errorPolicySkipLabel,
+                                    retryLabel = errorPolicyRetryLabel,
+                                    retryCountLabel = retryCountLabel,
+                                    retryIntervalLabel = retryIntervalLabel,
+                                    onPolicyChanged = actions.onSetDefaultErrorHandlingStrategy
+                                )
+                            }
+                        }
 
-        if (showThemeSection) item {
-            SettingsSection(title = themeSectionTitle) {
-                NativeSwitchRow(
-                    title = dynamicColorTitle,
-                    subtitle = dynamicColorSubtitle,
-                    icon = Icons.Default.Palette,
-                    tone = cloudTone(),
-                    position = SettingsGroupPosition.Top,
-                    checked = uiState.dynamicColorEnabled,
-                    onCheckedChange = actions.onSetDynamicColorEnabled
-                )
-                NativeSwitchRow(
-                    title = colorfulCardsTitle,
-                    subtitle = colorfulCardsSubtitle,
-                    icon = Icons.Default.AutoAwesome,
-                    tone = accentTone(),
-                    position = SettingsGroupPosition.Middle,
-                    checked = uiState.colorfulWorkflowCardsEnabled,
-                    onCheckedChange = actions.onSetColorfulWorkflowCardsEnabled
-                )
-                NativeSwitchRow(
-                    title = liquidGlassTitle,
-                    subtitle = liquidGlassSubtitle,
-                    icon = Icons.Default.BlurOn,
-                    tone = softTone(),
-                    checked = uiState.liquidGlassNavBarEnabled,
-                    position = SettingsGroupPosition.Middle,
-                    enabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S,
-                    onCheckedChange = actions.onSetLiquidGlassNavBarEnabled
-                )
-                NativeSliderRow(
-                    title = appScaleTitle,
-                    subtitle = appScaleSubtitle,
-                    icon = Icons.Default.Tune,
-                    tone = warningTone(),
-                    position = SettingsGroupPosition.Bottom,
-                    valueLabel = appScaleValueLabel,
-                    initialSliderValue = uiState.appScale * 100f,
-                    onScaleChange = actions.onSetAppScale
-                )
-            }
-        }
+                        SettingsSectionType.PERMISSIONS -> item {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                ShellModeCard(
+                                    title = shellPreferenceTitle,
+                                    subtitle = shellPreferenceSubtitle,
+                                    primaryLabel = shellShizukuLabel,
+                                    secondaryLabel = shellRootLabel,
+                                    coreLabel = stringResource(R.string.settings_btn_shell_core),
+                                    corePermissionDesc = stringResource(R.string.settings_core_shell_permission_desc),
+                                    coreShellLabel = stringResource(R.string.settings_btn_shell_core_shell),
+                                    coreRootLabel = stringResource(R.string.settings_btn_shell_core_root),
+                                    selectedMode = uiState.defaultShellMode,
+                                    position = SettingsGroupPosition.Top,
+                                    onModeSelected = actions.onSetDefaultShellMode
+                                )
+                                NativeEntryRow(
+                                    title = permissionManagerTitle,
+                                    subtitle = permissionManagerSubtitle,
+                                    icon = Icons.Default.Security,
+                                    tone = warningTone(),
+                                    position = SettingsGroupPosition.Middle,
+                                    onClick = actions.onOpenPermissionManager
+                                )
+                                NativeEntryRow(
+                                    title = permissionGuardianTitle,
+                                    subtitle = permissionGuardianSubtitle,
+                                    icon = Icons.Default.Lock,
+                                    tone = warningTone(),
+                                    position = SettingsGroupPosition.Bottom,
+                                    onClick = actions.onOpenPermissionGuardian
+                                )
+                            }
+                        }
 
-        if (showGeneralSection) item {
-            SettingsSection(title = generalSectionTitle) {
-                NativeEntryRow(
-                    title = moduleConfigTitle,
-                    subtitle = moduleConfigSubtitle,
-                    icon = Icons.Default.Settings,
-                    tone = paletteTone(),
-                    position = SettingsGroupPosition.Top,
-                    onClick = actions.onOpenModuleConfig
-                )
-                NativeEntryRow(
-                    title = globalVariablesTitle,
-                    subtitle = globalVariablesSubtitle,
-                    icon = Icons.Filled.Dataset,
-                    tone = paletteTone(),
-                    position = SettingsGroupPosition.Middle,
-                    onClick = actions.onOpenGlobalVariables
-                )
-                NativeEntryRow(
-                    title = modelConfigTitle,
-                    subtitle = modelConfigSubtitle,
-                    icon = Icons.Default.AutoAwesome,
-                    tone = paletteTone(),
-                    position = SettingsGroupPosition.Middle,
-                    onClick = actions.onOpenModelConfig
-                )
-                NativeSwitchRow(
-                    title = autoCheckUpdatesTitle,
-                    subtitle = autoCheckUpdatesSubtitle,
-                    icon = Icons.Default.SystemUpdate,
-                    tone = warmTone(),
-                    position = SettingsGroupPosition.Middle,
-                    checked = uiState.autoCheckUpdatesEnabled,
-                    onCheckedChange = actions.onSetAutoCheckUpdatesEnabled
-                )
-                NativeSwitchRow(
-                    title = lockScreenTitle,
-                    subtitle = lockScreenSubtitle,
-                    icon = Icons.Default.Lock,
-                    tone = warmTone(),
-                    position = SettingsGroupPosition.Middle,
-                    checked = uiState.allowShowOnLockScreen,
-                    onCheckedChange = actions.onSetAllowShowOnLockScreen
-                )
-                NativeSwitchRow(
-                    title = apiEnabledTitle,
-                    subtitle = apiEnabledSubtitle,
-                    icon = Icons.Default.Cloud,
-                    tone = cloudTone(),
-                    position = SettingsGroupPosition.Middle,
-                    checked = uiState.apiRunning,
-                    onCheckedChange = actions.onSetApiEnabled
-                )
-                NativeEntryRow(
-                    title = apiSettingsTitle,
-                    subtitle = apiSettingsSubtitle,
-                    value = apiStatusValue,
-                    icon = Icons.Default.Cloud,
-                    tone = cloudTone(),
-                    position = SettingsGroupPosition.Middle,
-                    onClick = actions.onOpenApiSettings
-                )
-                NativeSwitchRow(
-                    title = progressNotificationTitle,
-                    subtitle = progressNotificationSubtitle,
-                    icon = Icons.Default.Notifications,
-                    tone = accentTone(),
-                    position = SettingsGroupPosition.Middle,
-                    checked = uiState.progressNotificationEnabled,
-                    onCheckedChange = actions.onSetProgressNotificationEnabled
-                )
-                NativeSwitchRow(
-                    title = backgroundServiceTitle,
-                    subtitle = backgroundServiceSubtitle,
-                    icon = Icons.Default.Notifications,
-                    tone = accentTone(),
-                    position = SettingsGroupPosition.Middle,
-                    checked = uiState.backgroundServiceNotificationEnabled,
-                    onCheckedChange = actions.onSetBackgroundServiceNotificationEnabled,
-                    infoText = backgroundServiceInfo
-                )
-                NativeSwitchRow(
-                    title = forceKeepAliveTitle,
-                    subtitle = forceKeepAliveSubtitle,
-                    icon = Icons.Default.Security,
-                    tone = warningTone(),
-                    position = SettingsGroupPosition.Middle,
-                    checked = uiState.forceKeepAliveEnabled,
-                    onCheckedChange = actions.onSetForceKeepAliveEnabled,
-                    infoText = forceKeepAliveInfo
-                )
-                NativeSwitchRow(
-                    title = autoAccessibilityTitle,
-                    subtitle = autoAccessibilitySubtitle,
-                    icon = Icons.Default.Security,
-                    tone = warningTone(),
-                    position = SettingsGroupPosition.Middle,
-                    checked = (uiState.isShizukuActive || uiState.isRootAvailable) &&
-                        uiState.autoEnableAccessibility,
-                    enabled = uiState.isShizukuActive || uiState.isRootAvailable,
-                    onCheckedChange = actions.onSetAutoEnableAccessibility,
-                    infoText = autoAccessibilityInfo
-                )
-                NativeSwitchRow(
-                    title = typeFilterTitle,
-                    subtitle = typeFilterSubtitle,
-                    icon = Icons.Default.Tune,
-                    tone = languageTone(),
-                    position = SettingsGroupPosition.Middle,
-                    checked = uiState.enableTypeFilter,
-                    onCheckedChange = actions.onSetEnableTypeFilter,
-                    infoText = typeFilterInfo
-                )
-                NativeSwitchRow(
-                    title = popupKeepScreenOnTitle,
-                    subtitle = popupKeepScreenOnSubtitle,
-                    icon = Icons.Default.Lock,
-                    tone = languageTone(),
-                    position = SettingsGroupPosition.Middle,
-                    checked = uiState.allowPopupKeepScreenOn,
-                    onCheckedChange = actions.onSetAllowPopupKeepScreenOn,
-                    infoText = popupKeepScreenOnInfo
-                )
-                NativeSwitchRow(
-                    title = workflowKeepAwakeTitle,
-                    subtitle = workflowKeepAwakeSubtitle,
-                    icon = Icons.Default.BedtimeOff,
-                    tone = languageTone(),
-                    position = SettingsGroupPosition.Middle,
-                    checked = uiState.keepDeviceAwakeDuringWorkflow,
-                    onCheckedChange = actions.onSetKeepDeviceAwakeDuringWorkflow,
-                    infoText = workflowKeepAwakeInfo
-                )
-                NativeSwitchRow(
-                    title = hideRecentsTitle,
-                    subtitle = hideRecentsSubtitle,
-                    icon = Icons.Default.VisibilityOff,
-                    tone = languageTone(),
-                    position = SettingsGroupPosition.Middle,
-                    checked = uiState.hideFromRecents,
-                    onCheckedChange = actions.onSetHideFromRecents
-                )
-                DefaultErrorPolicyRow(
-                    title = defaultErrorStrategyTitle,
-                    subtitle = defaultErrorStrategySubtitle,
-                    icon = Icons.Default.BugReport,
-                    tone = languageTone(),
-                    position = SettingsGroupPosition.Bottom,
-                    policy = uiState.defaultErrorPolicy,
-                    retryCount = uiState.defaultRetryCount,
-                    retryIntervalMillis = uiState.defaultRetryIntervalMillis,
-                    stopLabel = errorPolicyStopLabel,
-                    skipLabel = errorPolicySkipLabel,
-                    retryLabel = errorPolicyRetryLabel,
-                    retryCountLabel = retryCountLabel,
-                    retryIntervalLabel = retryIntervalLabel,
-                    onPolicyChanged = actions.onSetDefaultErrorHandlingStrategy
-                )
-            }
-        }
+                        SettingsSectionType.EXPERIMENTAL -> item {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                NativeSwitchRow(
+                                    title = accessibilityDisguiseTitle,
+                                    subtitle = accessibilityDisguiseSubtitle,
+                                    icon = Icons.Default.AccessibilityNew,
+                                    tone = softTone(),
+                                    position = SettingsGroupPosition.Single,
+                                    checked = uiState.accessibilityDisguiseEnabled,
+                                    onCheckedChange = actions.onSetAccessibilityDisguiseEnabled
+                                )
+                            }
+                        }
 
-        if (showPermissionsSection) item {
-            SettingsSection(title = permissionsSectionTitle) {
-                ShellModeCard(
-                    title = shellPreferenceTitle,
-                    subtitle = shellPreferenceSubtitle,
-                    primaryLabel = shellShizukuLabel,
-                    secondaryLabel = shellRootLabel,
-                    coreLabel = stringResource(R.string.settings_btn_shell_core),
-                    corePermissionDesc = stringResource(R.string.settings_core_shell_permission_desc),
-                    coreShellLabel = stringResource(R.string.settings_btn_shell_core_shell),
-                    coreRootLabel = stringResource(R.string.settings_btn_shell_core_root),
-                    selectedMode = uiState.defaultShellMode,
-                    position = SettingsGroupPosition.Top,
-                    onModeSelected = actions.onSetDefaultShellMode
-                )
-                NativeEntryRow(
-                    title = permissionManagerTitle,
-                    subtitle = permissionManagerSubtitle,
-                    icon = Icons.Default.Security,
-                    tone = warningTone(),
-                    position = SettingsGroupPosition.Middle,
-                    onClick = actions.onOpenPermissionManager
-                )
-                NativeEntryRow(
-                    title = permissionGuardianTitle,
-                    subtitle = permissionGuardianSubtitle,
-                    icon = Icons.Default.Lock,
-                    tone = warningTone(),
-                    position = SettingsGroupPosition.Bottom,
-                    onClick = actions.onOpenPermissionGuardian
-                )
-            }
-        }
-
-        if (showExperimentalSection) item {
-            SettingsSection(title = experimentalSectionTitle) {
-                NativeSwitchRow(
-                    title = accessibilityDisguiseTitle,
-                    subtitle = accessibilityDisguiseSubtitle,
-                    icon = Icons.Default.AccessibilityNew,
-                    tone = softTone(),
-                    position = SettingsGroupPosition.Single,
-                    checked = uiState.accessibilityDisguiseEnabled,
-                    onCheckedChange = actions.onSetAccessibilityDisguiseEnabled
-                )
-            }
-        }
-
-        if (showDebuggingSection) item {
-            SettingsSection(title = debuggingSectionTitle) {
-                NativeSwitchRow(
-                    title = loggingTitle,
-                    subtitle = loggingSubtitle,
-                    icon = Icons.Default.BugReport,
-                    tone = accentTone(),
-                    position = SettingsGroupPosition.Top,
-                    checked = uiState.loggingEnabled,
-                    onCheckedChange = actions.onSetLoggingEnabled,
-                    infoText = loggingInfo
-                )
-                NativeSwitchRow(
-                    title = telemetryTitle,
-                    subtitle = telemetrySubtitle,
-                    icon = Icons.Default.BugReport,
-                    tone = accentTone(),
-                    position = SettingsGroupPosition.Middle,
-                    checked = uiState.telemetryEnabled,
-                    onCheckedChange = actions.onSetTelemetryEnabled,
-                    infoText = telemetryInfo
-                )
-                NativeEntryRow(
-                    title = crashReportsTitle,
-                    subtitle = crashReportsSubtitle,
-                    icon = Icons.Default.BugReport,
-                    tone = accentTone(),
-                    position = SettingsGroupPosition.Middle,
-                    onClick = actions.onOpenCrashReports
-                )
-                SettingsButtonRow(
-                    primaryLabel = exportLogsLabel,
-                    onPrimaryClick = actions.onExportLogs,
-                    primaryEnabled = uiState.loggingEnabled,
-                    secondaryLabel = clearLogsLabel,
-                    onSecondaryClick = actions.onClearLogs,
-                    secondaryEnabled = uiState.loggingEnabled,
-                    position = SettingsGroupPosition.Middle
-                )
-                SettingsButtonRow(
-                    primaryLabel = runDiagnosticLabel,
-                    onPrimaryClick = actions.onRunDiagnostic,
-                    primaryEnabled = uiState.loggingEnabled,
-                    secondaryLabel = keyTesterLabel,
-                    onSecondaryClick = actions.onOpenKeyTester,
-                    position = SettingsGroupPosition.Middle
-                )
-                SettingsButtonRow(
-                    primaryLabel = coreManagementLabel,
-                    onPrimaryClick = actions.onOpenCoreManagement,
-                    secondaryLabel = uiInspectorLabel,
-                    onSecondaryClick = actions.onStartUiInspector,
-                    position = SettingsGroupPosition.Bottom
-                )
-            }
-        }
-
-        if (showAboutSection) item {
-            SettingsSection(title = aboutSectionTitle) {
-                NativeEntryRow(
-                    title = aboutTitle,
-                    subtitle = aboutSubtitle,
-                    icon = Icons.Default.Info,
-                    tone = neutralTone(),
-                    position = SettingsGroupPosition.Single,
-                    onClick = actions.onOpenAbout
-                )
+                        SettingsSectionType.DEBUGGING -> item {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                NativeSwitchRow(
+                                    title = loggingTitle,
+                                    subtitle = loggingSubtitle,
+                                    icon = Icons.Default.BugReport,
+                                    tone = accentTone(),
+                                    position = SettingsGroupPosition.Top,
+                                    checked = uiState.loggingEnabled,
+                                    onCheckedChange = actions.onSetLoggingEnabled,
+                                    infoText = loggingInfo
+                                )
+                                NativeSwitchRow(
+                                    title = telemetryTitle,
+                                    subtitle = telemetrySubtitle,
+                                    icon = Icons.Default.BugReport,
+                                    tone = accentTone(),
+                                    position = SettingsGroupPosition.Middle,
+                                    checked = uiState.telemetryEnabled,
+                                    onCheckedChange = actions.onSetTelemetryEnabled,
+                                    infoText = telemetryInfo
+                                )
+                                NativeEntryRow(
+                                    title = crashReportsTitle,
+                                    subtitle = crashReportsSubtitle,
+                                    icon = Icons.Default.BugReport,
+                                    tone = accentTone(),
+                                    position = SettingsGroupPosition.Middle,
+                                    onClick = actions.onOpenCrashReports
+                                )
+                                SettingsButtonRow(
+                                    primaryLabel = exportLogsLabel,
+                                    onPrimaryClick = actions.onExportLogs,
+                                    primaryEnabled = uiState.loggingEnabled,
+                                    secondaryLabel = clearLogsLabel,
+                                    onSecondaryClick = actions.onClearLogs,
+                                    secondaryEnabled = uiState.loggingEnabled,
+                                    position = SettingsGroupPosition.Middle
+                                )
+                                SettingsButtonRow(
+                                    primaryLabel = runDiagnosticLabel,
+                                    onPrimaryClick = actions.onRunDiagnostic,
+                                    primaryEnabled = uiState.loggingEnabled,
+                                    secondaryLabel = keyTesterLabel,
+                                    onSecondaryClick = actions.onOpenKeyTester,
+                                    position = SettingsGroupPosition.Middle
+                                )
+                                SettingsButtonRow(
+                                    primaryLabel = coreManagementLabel,
+                                    onPrimaryClick = actions.onOpenCoreManagement,
+                                    secondaryLabel = uiInspectorLabel,
+                                    onSecondaryClick = actions.onStartUiInspector,
+                                    position = SettingsGroupPosition.Bottom
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }

@@ -26,6 +26,8 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -35,6 +37,8 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -117,17 +121,21 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.chaomixian.vflow.R
@@ -352,6 +360,12 @@ fun ChatScreen(
         modifier = modifier
             .fillMaxSize()
     ) {
+        // AI 工作时的屏幕边缘亮光特效
+        AgentGlowOverlay(
+            active = isAgentActive,
+            dimAlpha = 0.12f,
+        )
+
         LazyColumn(
             state = listState,
             modifier = Modifier
@@ -414,114 +428,63 @@ fun ChatScreen(
             )
         }
 
-        Card(
+        // 底部渐变把正文与输入器分层
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .height(16.dp + composerBottomPadding)
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color.Transparent,
+                            MaterialTheme.colorScheme.surface,
+                        ),
+                    )
+                )
+        )
+
+        // Eta 风格输入栏
+        EtaStyleInputBar(
+            prompt = prompt,
+            onPromptChange = { prompt = it },
+            isStreaming = isAgentActive,
+            shouldShowStopButton = shouldShowStopButton,
+            canSend = canUseComposerAction,
+            onSend = {
+                if (shouldShowStopButton) {
+                    chatViewModel.stopAgent()
+                    return@EtaStyleInputBar
+                }
+                if (selectedPhotoUris.isNotEmpty() || capturedPreview != null) {
+                    scope.launch {
+                        snackbarHostState.showSnackbar(
+                            context.getString(R.string.chat_attachment_not_supported)
+                        )
+                    }
+                }
+                if (chatViewModel.sendMessage(prompt)) {
+                    prompt = ""
+                    selectedPhotoUris.clear()
+                    capturedPreview = null
+                    webSearchSelected = false
+                }
+            },
+            onAttachClick = {
+                attachmentSheetVisible = true
+                if (!hasPhotoPermission(context)) {
+                    requestPhotoPermissionLauncher.launch(photoPermissionName())
+                }
+            },
+            onAutoApprovalScopeChange = chatViewModel::cycleAutoApprovalScope,
+            autoApprovalScope = chatUiState.autoApprovalScope,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .imePadding()
-                .padding(horizontal = 16.dp)
+                .padding(horizontal = 14.dp)
                 .padding(bottom = composerBottomPadding),
-            shape = RoundedCornerShape(28.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
-            ),
-            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        ) {
-            TextField(
-                value = prompt,
-                onValueChange = { prompt = it },
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = {
-                    Text(stringResource(R.string.chat_prompt_hint))
-                },
-                leadingIcon = {
-                    IconButton(
-                        modifier = Modifier.padding(start = 4.dp),
-                        onClick = {
-                            attachmentSheetVisible = true
-                            if (!hasPhotoPermission(context)) {
-                                requestPhotoPermissionLauncher.launch(photoPermissionName())
-                            }
-                        }
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Add,
-                            contentDescription = stringResource(R.string.chat_more),
-                        )
-                    }
-                },
-                trailingIcon = {
-                    FilledIconButton(
-                        modifier = Modifier.padding(end = 4.dp),
-                        onClick = {
-                            if (shouldShowStopButton) {
-                                chatViewModel.stopAgent()
-                                return@FilledIconButton
-                            }
-                            if (selectedPhotoUris.isNotEmpty() || capturedPreview != null) {
-                                scope.launch {
-                                    snackbarHostState.showSnackbar(
-                                        context.getString(R.string.chat_attachment_not_supported)
-                                    )
-                                }
-                            }
-                            if (chatViewModel.sendMessage(prompt)) {
-                                prompt = ""
-                                selectedPhotoUris.clear()
-                                capturedPreview = null
-                                webSearchSelected = false
-                            }
-                        },
-                        enabled = canUseComposerAction,
-                        colors = IconButtonDefaults.filledIconButtonColors(
-                            containerColor = when {
-                                shouldShowStopButton -> MaterialTheme.colorScheme.error
-                                prompt.isNotBlank() -> MaterialTheme.colorScheme.primary
-                                else -> MaterialTheme.colorScheme.surfaceContainerHighest
-                            },
-                            contentColor = when {
-                                shouldShowStopButton -> MaterialTheme.colorScheme.onError
-                                prompt.isNotBlank() -> MaterialTheme.colorScheme.onPrimary
-                                else -> MaterialTheme.colorScheme.onSurfaceVariant
-                            }
-                        ),
-                    ) {
-                        Icon(
-                            imageVector = if (shouldShowStopButton) Icons.Rounded.Stop else Icons.Rounded.ArrowUpward,
-                            contentDescription = stringResource(
-                                if (shouldShowStopButton) R.string.chat_stop else R.string.chat_send
-                            ),
-                        )
-                    }
-                },
-                singleLine = false,
-                maxLines = 6,
-                shape = RoundedCornerShape(28.dp),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(
-                    onSend = {
-                        if (shouldShowStopButton) {
-                            chatViewModel.stopAgent()
-                            return@KeyboardActions
-                        }
-                        if (chatViewModel.sendMessage(prompt)) {
-                            prompt = ""
-                            selectedPhotoUris.clear()
-                            capturedPreview = null
-                            webSearchSelected = false
-                        }
-                    }
-                ),
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    focusedIndicatorColor = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent,
-                    disabledIndicatorColor = Color.Transparent,
-                )
-            )
-        }
+        )
 
         SnackbarHost(
             hostState = snackbarHostState,
@@ -2221,3 +2184,204 @@ private fun queryRecentPhotos(context: Context): List<RecentPhotoItem> {
         }
     }
 }
+
+// region Eta 风格输入栏
+
+private val EtaSendButtonVisualSize = 32.dp
+
+/**
+ * Eta 风格输入栏：圆角卡片容器 + 附件按钮 + 自动批准 chip + 圆形发送/停止按钮。
+ * 参考 Eta 项目的 AgentChatInputBar，适配 Material 3。
+ */
+@Composable
+private fun EtaStyleInputBar(
+    prompt: String,
+    onPromptChange: (String) -> Unit,
+    isStreaming: Boolean,
+    shouldShowStopButton: Boolean,
+    canSend: Boolean,
+    onSend: () -> Unit,
+    onAttachClick: () -> Unit,
+    onAutoApprovalScopeChange: () -> Unit,
+    autoApprovalScope: ChatToolAutoApprovalScope,
+    modifier: Modifier = Modifier,
+) {
+    val keyboard = LocalSoftwareKeyboardController.current
+
+    LaunchedEffect(isStreaming) {
+        if (isStreaming) keyboard?.hide()
+    }
+
+    Column(
+        modifier = modifier,
+    ) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            tonalElevation = 1.dp,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+            ) {
+                // 输入区
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .defaultMinSize(minHeight = 40.dp)
+                        .padding(horizontal = 8.dp, vertical = 5.dp),
+                    contentAlignment = Alignment.TopStart,
+                ) {
+                    if (prompt.isBlank()) {
+                        Text(
+                            text = if (isStreaming) stringResource(R.string.chat_agent_working) else stringResource(R.string.chat_prompt_hint),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    BasicTextField(
+                        value = prompt,
+                        onValueChange = onPromptChange,
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = TextStyle(
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontSize = 16.sp,
+                            lineHeight = 22.sp,
+                        ),
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                        maxLines = 6,
+                        minLines = 1,
+                    )
+                }
+
+                // 底部按钮行
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // 附件按钮
+                    IconButton(
+                        onClick = onAttachClick,
+                        modifier = Modifier.size(38.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Add,
+                            contentDescription = stringResource(R.string.chat_more),
+                            modifier = Modifier.size(22.dp),
+                            tint = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(2.dp))
+
+                    // 自动批准 chip
+                    AutoApprovalChip(
+                        scope = autoApprovalScope,
+                        enabled = !isStreaming,
+                        onClick = onAutoApprovalScopeChange,
+                    )
+
+                    Spacer(modifier = Modifier.weight(1f))
+
+                    // 发送/停止按钮
+                    IconButton(
+                        onClick = onSend,
+                        enabled = isStreaming || canSend,
+                        modifier = Modifier.size(38.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(EtaSendButtonVisualSize)
+                                .clip(CircleShape)
+                                .background(
+                                    when {
+                                        isStreaming -> MaterialTheme.colorScheme.onSurface
+                                        canSend -> MaterialTheme.colorScheme.primary
+                                        else -> MaterialTheme.colorScheme.surfaceContainerHighest
+                                    }
+                                ),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = if (isStreaming) Icons.Rounded.Stop else Icons.Rounded.ArrowUpward,
+                                contentDescription = if (isStreaming) stringResource(R.string.chat_stop) else stringResource(R.string.chat_send),
+                                modifier = Modifier.size(if (isStreaming) 14.dp else 18.dp),
+                                tint = when {
+                                    isStreaming -> MaterialTheme.colorScheme.surface
+                                    canSend -> MaterialTheme.colorScheme.onPrimary
+                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 自动批准开关 chip：显示当前级别，点击循环切换。
+ */
+@Composable
+private fun AutoApprovalChip(
+    scope: ChatToolAutoApprovalScope,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val chipShape = RoundedCornerShape(percent = 50)
+    val contentColor = when {
+        scope == ChatToolAutoApprovalScope.OFF -> MaterialTheme.colorScheme.onSurfaceVariant
+        else -> MaterialTheme.colorScheme.primary
+    }
+    Row(
+        modifier = modifier
+            .clip(chipShape)
+            .background(
+                if (scope != ChatToolAutoApprovalScope.OFF) {
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+                } else {
+                    Color.Transparent
+                }
+            )
+            .then(
+                if (scope == ChatToolAutoApprovalScope.OFF) {
+                    Modifier.border(
+                        0.5.dp,
+                        MaterialTheme.colorScheme.outline.copy(alpha = 0.6f),
+                        chipShape,
+                    )
+                } else {
+                    Modifier
+                }
+            )
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 11.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.AutoAwesome,
+            contentDescription = null,
+            modifier = Modifier.size(14.dp),
+            tint = contentColor,
+        )
+        Spacer(modifier = Modifier.width(5.dp))
+        Text(
+            text = stringResource(
+                when (scope) {
+                    ChatToolAutoApprovalScope.OFF -> R.string.chat_auto_approve_scope_off
+                    ChatToolAutoApprovalScope.READ_ONLY -> R.string.chat_auto_approve_scope_read_only
+                    ChatToolAutoApprovalScope.LOW_RISK -> R.string.chat_auto_approve_scope_low_risk
+                    ChatToolAutoApprovalScope.STANDARD -> R.string.chat_auto_approve_scope_standard
+                    ChatToolAutoApprovalScope.ALL -> R.string.chat_auto_approve_scope_all
+                }
+            ),
+            style = MaterialTheme.typography.labelSmall,
+            color = contentColor,
+        )
+    }
+}
+
+// endregion

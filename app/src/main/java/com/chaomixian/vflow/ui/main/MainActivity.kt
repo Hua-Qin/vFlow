@@ -27,6 +27,7 @@ import com.chaomixian.vflow.core.workflow.module.triggers.handlers.TriggerHandle
 import com.chaomixian.vflow.extension.ExternalModuleManager
 import com.chaomixian.vflow.services.ExecutionNotificationManager
 import com.chaomixian.vflow.services.PermissionGuardianService
+import com.chaomixian.vflow.permissions.PermissionManager
 import com.chaomixian.vflow.services.ShellManager
 import com.chaomixian.vflow.services.TriggerService
 import com.chaomixian.vflow.services.VoiceTriggerService
@@ -218,10 +219,59 @@ class MainActivity : BaseActivity() {
     override fun onStart() {
         super.onStart()
         VoiceTriggerService.startIfEligible(this)
+        // 每次进入应用都自动校验并尝试开启核心权限（无障碍/悬浮窗/安全设置）。
+        // 这解决了"首次初始化正常，第二次进入权限丢失"的问题：系统/用户可能在
+        // 后台杀掉或禁用了无障碍服务，这里在每次回到前台时自动补回。
+        autoVerifyAndEnableCorePermissions()
         if (startupCompleted) {
             checkAndApplyStartupSettings()
             lifecycleScope.launch(Dispatchers.IO) {
                 WorkflowPermissionRecovery.recoverEligibleWorkflows(applicationContext)
+            }
+        }
+    }
+
+    /**
+     * 自动校验并开启核心自动化权限。
+     *
+     * 每次进入应用（onStart）时执行：
+     *  1. 检查 Shell（Shizuku/Root）是否可用；
+     *  2. 若可用，依次自动授予 WRITE_SECURE_SETTINGS → OVERLAY → ACCESSIBILITY；
+     *  3. WRITE_SECURE_SETTINGS 排在最前，使后续 enableAccessibilityService 可走
+     *     SecureSettings 直写路径（更快更可靠，不依赖 Shell 连接就绪）。
+     *
+     * 全程在 IO 协程执行，不阻塞 UI；任何失败只记日志不弹窗，避免打扰用户。
+     */
+    private fun autoVerifyAndEnableCorePermissions() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val shizukuActive = ShellManager.isShizukuActive(applicationContext)
+                val rootAvailable = ShellManager.isRootAvailable()
+                if (!shizukuActive && !rootAvailable) {
+                    DebugLogger.d("MainActivity", "自动初始化权限: Shell 不可用(Shizuku/Root 均未就绪)，跳过")
+                    return@launch
+                }
+                DebugLogger.i("MainActivity", "自动初始化权限: Shell 可用(shizuku=$shizukuActive, root=$rootAvailable)，开始校验核心权限")
+
+                // 关键权限列表，按授予顺序排列
+                val corePermissions = listOf(
+                    PermissionManager.WRITE_SECURE_SETTINGS,
+                    PermissionManager.OVERLAY,
+                    PermissionManager.ACCESSIBILITY
+                )
+
+                for (permission in corePermissions) {
+                    val alreadyGranted = PermissionManager.isGranted(applicationContext, permission)
+                    if (alreadyGranted) {
+                        DebugLogger.d("MainActivity", "自动初始化权限: ${permission.name} 已开启，跳过")
+                        continue
+                    }
+                    DebugLogger.i("MainActivity", "自动初始化权限: ${permission.name} 未开启，尝试自动授予...")
+                    val granted = PermissionManager.autoGrantPermission(applicationContext, permission)
+                    DebugLogger.i("MainActivity", "自动初始化权限: ${permission.name} 自动授予结果=$granted")
+                }
+            } catch (e: Exception) {
+                DebugLogger.e("MainActivity", "自动初始化权限异常", e)
             }
         }
     }

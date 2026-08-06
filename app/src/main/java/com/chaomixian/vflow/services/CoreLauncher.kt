@@ -101,77 +101,92 @@ object CoreLauncher {
             val command = buildLaunchCommand(dexFile, logFile, finalMode, context)
 
             // 4. 执行启动命令
-            DebugLogger.d(TAG, "执行启动命令: $command (ShellMode: $finalMode)")
-            val shellMode = finalMode.toShellMode()
-
-            val result = ShellManager.execShellCommand(context, command, shellMode)
+            // 对于 SHIZUKU 模式，优先用 ROOT 执行启动命令（最可靠，不依赖 Shizuku UserService 绑定）。
+            // MIUI 等 ROM 上 Shizuku UserService 绑定经常超时（:vflow_shizuku 进程无法被拉起，
+            // 表现为 onServiceConnected 永不回调），而 isRootAvailable() 又可能因 su 弹窗时限
+            // 返回假阴性，导致「既不能用 Shizuku 也无法回退 Root」的双重失败，Core 进程根本无法启动。
+            //
+            // 解决：SHIZUKU 模式下优先尝试 ROOT 执行，但通过 vflow_shell_exec 降权到 shell (uid=2000)，
+            // 确保 Core 进程以 Shell 权限运行（与 Shizuku 模式一致），而非 Root。这样首页模式
+            // 显示正确为 "Shizuku"，且避免 Core 以过高权限运行。
+            // 如果 ROOT 不可用或 vflow_shell_exec 部署失败，回退到 SHIZUKU 直接执行。
+            val result = if (finalMode == LaunchMode.SHIZUKU) {
+                DebugLogger.d(TAG, "SHIZUKU 模式：优先尝试 ROOT + vflow_shell_exec 降权执行（避免 Shizuku UserService 绑定超时）")
+                val droppedCommand = buildShizukuViaRootCommand(dexFile, logFile, context)
+                val rootResult = ShellManager.execShellCommand(context, droppedCommand, ShellManager.ShellMode.ROOT)
+                if (!rootResult.startsWith("Error")) {
+                    rootResult
+                } else {
+                    DebugLogger.w(TAG, "ROOT 执行启动命令失败(${rootResult.take(120)})，回退到 SHIZUKU")
+                    ShellManager.execShellCommand(context, command, ShellManager.ShellMode.SHIZUKU)
+                }
+            } else {
+                ShellManager.execShellCommand(context, command, finalMode.toShellMode())
+            }
 
             if (result.startsWith("Error")) {
                 DebugLogger.e(TAG, "vFlowCore 启动命令执行失败: $result")
+                return LaunchResult(success = false, mode = finalMode, error = result)
+            }
+
+            // 命令已成功发送（无论是首次成功还是 ROOT 重试成功），等待 Core 响应
+            DebugLogger.i(TAG, "vFlowCore 启动命令已发送，正在等待响应...")
+            // 给一点时间让进程启动
+            delay(500)
+
+            // 验证启动（带重试机制，最多等待5秒）
+            var success = false
+            for (i in 1..10) {
+                if (VFlowCoreBridge.ping()) {
+                    DebugLogger.i(TAG, "vFlowCore 启动验证成功！(尝试 $i/10) 权限: ${VFlowCoreBridge.privilegeMode}")
+                    success = true
+                    break
+                }
+                if (i < 10) {
+                    DebugLogger.d(TAG, "vFlowCore 未响应，继续等待... ($i/10)")
+                    delay(500) // 每次等待500ms，总共最多5秒
+                }
+            }
+
+            if (success) {
+                LaunchResult(
+                    success = true,
+                    mode = finalMode,
+                    privilegeMode = VFlowCoreBridge.privilegeMode
+                )
+            } else {
+                // 启动后未响应：立即读 server_process.log 的头部和尾部（如果存在），
+                // 写入 App 调试日志，便于在不 adb 的情况下定位（setuid 失败/类加载错误等）。
+                val headTail = try {
+                    if (logFile.exists() && logFile.length() > 0L) {
+                        val head = logFile.readBytes().take(2048).toByteArray().toString(Charsets.UTF_8)
+                        val tail = if (logFile.length() > 2048) {
+                            val start = (logFile.length() - 2048).coerceAtLeast(0L)
+                            val arr = java.io.RandomAccessFile(logFile, "r").use { raf ->
+                                raf.seek(start)
+                                val buf = ByteArray(2048)
+                                val n = raf.read(buf)
+                                if (n > 0) buf.copyOf(n) else ByteArray(0)
+                            }
+                            String(arr, Charsets.UTF_8)
+                        } else ""
+                        "（${logFile.length()} bytes）\n===== HEAD =====\n$head\n${if (tail.isNotEmpty()) "===== TAIL =====\n$tail" else ""}"
+                    } else if (logFile.exists()) {
+                        "（文件为空，${logFile.length()} bytes）"
+                    } else {
+                        "（日志文件不存在）"
+                    }
+                } catch (t: Throwable) {
+                    "（读取日志异常: ${t.javaClass.simpleName}: ${t.message}）"
+                }
+                DebugLogger.w(TAG, "vFlowCore 启动后未响应 Ping (尝试10次后仍失败)。\n" +
+                        "server_process.log 路径: ${logFile.absolutePath}\n" +
+                        "server_process.log 内容: $headTail")
                 LaunchResult(
                     success = false,
                     mode = finalMode,
-                    error = result
+                    error = "启动后未响应 Ping (等待5秒后超时). server_process.log: $headTail"
                 )
-            } else {
-                DebugLogger.i(TAG, "vFlowCore 启动命令已发送，正在等待响应...")
-                // 给一点时间让进程启动
-                delay(500)
-
-                // 验证启动（带重试机制，最多等待5秒）
-                var success = false
-                for (i in 1..10) {
-                    if (VFlowCoreBridge.ping()) {
-                        DebugLogger.i(TAG, "vFlowCore 启动验证成功！(尝试 $i/10) 权限: ${VFlowCoreBridge.privilegeMode}")
-                        success = true
-                        break
-                    }
-                    if (i < 10) {
-                        DebugLogger.d(TAG, "vFlowCore 未响应，继续等待... ($i/10)")
-                        delay(500) // 每次等待500ms，总共最多5秒
-                    }
-                }
-
-                if (success) {
-                    LaunchResult(
-                        success = true,
-                        mode = finalMode,
-                        privilegeMode = VFlowCoreBridge.privilegeMode
-                    )
-                } else {
-                    // 启动后未响应：立即读 server_process.log 的头部和尾部（如果存在），
-                    // 写入 App 调试日志，便于在不 adb 的情况下定位（setuid 失败/类加载错误等）。
-                    val headTail = try {
-                        if (logFile.exists() && logFile.length() > 0L) {
-                            val head = logFile.readBytes().take(2048).toByteArray().toString(Charsets.UTF_8)
-                            val tail = if (logFile.length() > 2048) {
-                                val start = (logFile.length() - 2048).coerceAtLeast(0L)
-                                val arr = java.io.RandomAccessFile(logFile, "r").use { raf ->
-                                    raf.seek(start)
-                                    val buf = ByteArray(2048)
-                                    val n = raf.read(buf)
-                                    if (n > 0) buf.copyOf(n) else ByteArray(0)
-                                }
-                                String(arr, Charsets.UTF_8)
-                            } else ""
-                            "（${logFile.length()} bytes）\n===== HEAD =====\n$head\n${if (tail.isNotEmpty()) "===== TAIL =====\n$tail" else ""}"
-                        } else if (logFile.exists()) {
-                            "（文件为空，${logFile.length()} bytes）"
-                        } else {
-                            "（日志文件不存在）"
-                        }
-                    } catch (t: Throwable) {
-                        "（读取日志异常: ${t.javaClass.simpleName}: ${t.message}）"
-                    }
-                    DebugLogger.w(TAG, "vFlowCore 启动后未响应 Ping (尝试10次后仍失败)。\n" +
-                            "server_process.log 路径: ${logFile.absolutePath}\n" +
-                            "server_process.log 内容: $headTail")
-                    LaunchResult(
-                        success = false,
-                        mode = finalMode,
-                        error = "启动后未响应 Ping (等待5秒后超时). server_process.log: $headTail"
-                    )
-                }
             }
         } catch (e: Exception) {
             DebugLogger.e(TAG, "启动过程发生异常", e)
@@ -440,9 +455,43 @@ object CoreLauncher {
                 "sh -c 'export CLASSPATH=\"$classpath\"; exec app_process /system/bin $CORE_CLASS --app-package \"$packageName\" $transportArgs' > \"$logPath\" 2>&1 &"
             }
         } else {
-            // Shizuku 或 AUTO 模式：Master 以 shell 权限运行，无需降权，直接启动
+            // Shizuku 或 AUTO 模式：Master 以 shell 权限运行，无需降权，直接启动。
+            // 使用 setsid 创建新会话，确保 Core 进程脱离执行者（Shizuku UserService / su shell）
+            // 的进程组，避免执行者退出/被回收时 Core 被一同终止（导致端口 19999 ECONNREFUSED）。
+            // 无论最终用 ROOT 还是 SHIZUKU 执行此命令，setsid 都能保证 Core 进程独立存活。
             DebugLogger.d(TAG, "Shell 模式：直接启动（无需降权）")
-            "sh -c 'export CLASSPATH=\"$classpath\"; exec app_process /system/bin $CORE_CLASS --app-package \"$packageName\" $transportArgs' > \"$logPath\" 2>&1 &"
+            "setsid sh -c 'export CLASSPATH=\"$classpath\"; exec app_process /system/bin $CORE_CLASS --app-package \"$packageName\" $transportArgs' > \"$logPath\" 2>&1 &"
+        }
+    }
+
+    /**
+     * 构建 SHIZUKU 模式通过 ROOT 回退执行时的启动命令。
+     *
+     * 与普通 SHIZUKU 命令不同，此命令使用 vflow_shell_exec 包装 app_process，
+     * 在 ROOT 执行时先降权到 shell (uid=2000) 再启动 Core，
+     * 确保 Core 进程以 Shell 权限运行，而非 Root。
+     */
+    private fun buildShizukuViaRootCommand(
+        dexFile: File,
+        logFile: File,
+        context: Context
+    ): String {
+        val classpath = dexFile.absolutePath
+        val logPath = logFile.absolutePath
+        val packageName = context.packageName
+        val transportArgs = buildTransportArgs(context)
+
+        // 部署 vflow_shell_exec 用于降权
+        val shellLauncher = deployShellLauncher(context)
+
+        return if (shellLauncher != null) {
+            DebugLogger.d(TAG, "SHIZUKU-via-ROOT：使用 vflow_shell_exec 降权到 shell (uid=2000)，path: ${shellLauncher.absolutePath}")
+            // vflow_shell_exec 格式: <vflow_shell_exec> CLASSPATH=<path> app_process /system/bin <MainClass> <args>
+            // 它会先 setuid/setgid 到 2000，再 exec app_process
+            "setsid sh -c 'exec ${shellLauncher.absolutePath} CLASSPATH=\"$classpath\" app_process /system/bin $CORE_CLASS --app-package \"$packageName\" $transportArgs' > \"$logPath\" 2>&1 &"
+        } else {
+            DebugLogger.w(TAG, "SHIZUKU-via-ROOT：vflow_shell_exec 部署失败，回退到直接启动（Core 将以 Root 身份运行）")
+            "setsid sh -c 'export CLASSPATH=\"$classpath\"; exec app_process /system/bin $CORE_CLASS --app-package \"$packageName\" $transportArgs' > \"$logPath\" 2>&1 &"
         }
     }
 

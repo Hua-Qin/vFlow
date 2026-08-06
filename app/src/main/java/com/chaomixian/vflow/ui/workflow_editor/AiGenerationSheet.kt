@@ -13,15 +13,18 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
 import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
 import com.chaomixian.vflow.R
 import com.chaomixian.vflow.core.logging.DebugLogger
 import com.chaomixian.vflow.core.workflow.model.Workflow
+import com.chaomixian.vflow.ui.chat.ChatPresetRepository
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
+import com.google.android.material.card.MaterialCardView
 import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -45,6 +48,9 @@ class AiGenerationSheet : BottomSheetDialogFragment() {
     private lateinit var btnGenerate: Button
     private lateinit var layoutSettingsContent: LinearLayout
     private lateinit var ivExpandArrow: ImageView
+    private lateinit var cardModelInfo: MaterialCardView
+    private lateinit var tvModelInfo: TextView
+    private lateinit var tvModelInfoTitle: TextView
 
     private var generatingJob: Job? = null // 用于跟踪任务以便取消
 
@@ -78,6 +84,9 @@ class AiGenerationSheet : BottomSheetDialogFragment() {
         btnGenerate = view.findViewById(R.id.btn_generate)
         layoutSettingsContent = view.findViewById(R.id.layout_settings_content)
         ivExpandArrow = view.findViewById(R.id.iv_expand_arrow)
+        cardModelInfo = view.findViewById(R.id.card_model_info)
+        tvModelInfo = view.findViewById(R.id.tv_model_info)
+        tvModelInfoTitle = view.findViewById(R.id.tv_model_info_title)
 
         val headerLayout = view.findViewById<LinearLayout>(R.id.layout_settings_header)
 
@@ -87,10 +96,15 @@ class AiGenerationSheet : BottomSheetDialogFragment() {
             ivExpandArrow.rotation = if (!isVisible) 180f else 0f
         }
 
-        loadConfig()
+        // 优先从会话默认模型配置加载；失败再回退到本地缓存
+        if (!loadDefaultModelConfig()) {
+            loadConfig()
+        }
 
         cgProvider.setOnCheckedStateChangeListener { _, checkedIds ->
             if (checkedIds.isEmpty()) return@setOnCheckedStateChangeListener
+            // 用户手动切换 provider 时，覆盖默认模型信息提示
+            tvModelInfoTitle.text = getString(R.string.ai_generation_model_load_failed)
             when (checkedIds[0]) {
                 R.id.chip_bigmodel -> {
                     etBaseUrl.setText("https://open.bigmodel.cn/api/paas/v4")
@@ -130,6 +144,46 @@ class AiGenerationSheet : BottomSheetDialogFragment() {
             saveConfig(config)
             performGeneration(requirement, config)
         }
+    }
+
+    /**
+     * 从会话页面设置中已配置的默认模型加载配置。
+     * @return true 表示成功加载到默认预设；false 表示未配置，需调用方回退
+     */
+    private fun loadDefaultModelConfig(): Boolean {
+        val repo = ChatPresetRepository(requireContext())
+        val defaultPresetId = repo.getDefaultPresetId() ?: return showNoDefaultModelHint()
+        val preset = repo.getPresets().firstOrNull { it.id == defaultPresetId }
+            ?: return showNoDefaultModelHint()
+        val providerConfig = repo.getProviderConfig(preset.providerConfigId)
+            ?: return showNoDefaultModelHint()
+
+        // 填充字段
+        etBaseUrl.setText(providerConfig.baseUrl)
+        etModel.setText(preset.model)
+        etApiKey.setText(providerConfig.apiKey)
+
+        // 默认选中 "custom" chip，因为预设使用自定义 baseUrl/model
+        // 这样用户切换 chip 时才会触发 chip 的 onCheckedStateChangeListener 重新填默认值
+        view?.findViewById<Chip>(R.id.chip_custom)?.isChecked = true
+
+        // 显示当前默认模型信息卡片
+        val presetName = preset.name.ifBlank { preset.model.ifBlank { providerConfig.name } }
+        val displayName = "${providerConfig.providerEnum.displayName} · $presetName"
+        tvModelInfoTitle.text = getString(R.string.ai_generation_model_loaded)
+        tvModelInfo.text = getString(R.string.ai_generation_using_default_model, displayName)
+        cardModelInfo.visibility = View.VISIBLE
+
+        DebugLogger.i(TAG, "已从会话默认预设加载模型: $displayName (${preset.model})")
+        return true
+    }
+
+    private fun showNoDefaultModelHint(): Boolean {
+        tvModelInfoTitle.text = getString(R.string.ai_generation_model_load_failed)
+        tvModelInfo.text = getString(R.string.ai_generation_no_default_model)
+        cardModelInfo.visibility = View.VISIBLE
+        DebugLogger.i(TAG, "未在会话设置中找到默认模型，将回退到本地缓存")
+        return false
     }
 
     private fun performGeneration(requirement: String, config: WorkflowAiGenerator.AiConfig) {

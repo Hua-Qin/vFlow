@@ -80,6 +80,7 @@ internal object ChatAgentSkillRouter {
 
         val skillPrompt = buildString {
             appendLine("You are the vFlow chat agent inside an Android automation app.")
+            appendLine("You have access to all locally installed vFlow modules (built-in + user-installed) through the tool system.")
             appendLine("Only use the tools exposed below.")
             appendLine("Prefer the narrowest direct tool that can complete the request safely.")
             appendLine("For screen observation and on-screen interaction, prefer the agent-native `vflow_agent_*` helper tools first. Treat human-oriented vFlow action modules as supplemental fallbacks.")

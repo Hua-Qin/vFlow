@@ -15,7 +15,7 @@ name: Android CI
 
 on:
   push:
-    branches: [ master, main ]
+    branches: [ "**" ]
   pull_request:
     branches: [ master, main ]
   workflow_dispatch:
@@ -183,4 +183,5 @@ jobs:
           path: app/build/outputs/apk/**/*.apk
           if-no-files-found: error
           retention-days: 14
+          # 最高压缩级别：用少量CPU时间换取更短的上传耗时和更小的存储占用。
           compression-level: 9

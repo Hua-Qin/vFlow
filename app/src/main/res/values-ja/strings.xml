@@ -11,6 +11,7 @@
     <string name="title_settings">設定</string>
     <string name="chat_placeholder_message">AI会話機能も近々追加される予定だ。</string>
     <string name="chat_prompt_hint">質問を入力してください</string>
+    <string name="chat_agent_working">AI実行中…</string>
     <string name="chat_more">さらなるアクション</string>
     <string name="chat_send">送信</string>
     <string name="chat_stop">停止</string>
@@ -21,8 +22,8 @@
     <string name="chat_add_photos">%1$d写真を追加</string>
     <string name="chat_web_search_title">Web検索</string>
     <string name="chat_web_search_description">リアルタイムのニュースや情報を見つける</string>
-    <string name="chat_auto_approve_title">自動承認の範囲</string>
-    <string name="chat_auto_approve_description">現在の会話のツール操作を自動的に解放します。</string>
+    <string name="chat_auto_approve_title">自動承認</string>
+    <string name="chat_auto_approve_description">AIのツール操作を手動確認なしで自動承認します。タップでレベルを切り替え。</string>
     <string name="chat_auto_approve_scope_off">オフ</string>
     <string name="chat_auto_approve_scope_read_only">ただ観察するだけ</string>
     <string name="chat_auto_approve_scope_low_risk">低リスク</string>
@@ -307,7 +308,7 @@
     <string name="home_core_status_stopped">停止しました</string>
     <string name="home_core_mode">モード: %s</string>
     <string name="home_privilege_root">Root</string>
-    <string name="home_privilege_shell">Shell</string>
+    <string name="home_privilege_shell">Shizuku</string>
     <string name="home_privilege_none">許可がありません</string>
     <string name="home_total_workflows">ワークフローの総数</string>
     <string name="home_auto_tasks">タスクを自動化する</string>

@@ -65,10 +65,37 @@ abstract class BaseWorker(
                 startTcpServer()
             }
         } catch (e: Exception) {
+            // TCP 绑定失败（常见于 ShellWorker 降权后仍在 untrusted_app SELinux 域，
+            // 绑定 ServerSocket 被 SELinux 拒绝 EACCES）。
+            // 若有 UNIX socket 名可用，回退到 UNIX 抽象 socket 而不是直接 exit。
+            val canFallbackToUnix = !useUnixSocket && unixSocketPath != null
+            if (canFallbackToUnix && isEaccesOrBindFailure(e)) {
+                System.err.println("⚠️ $name Worker TCP bind failed (${e.message}), falling back to UNIX abstract socket @$unixSocketPath")
+                try {
+                    startUnixServer()
+                    return
+                } catch (e2: Exception) {
+                    System.err.println("❌ $name Worker UNIX fallback also failed: ${e2.message}")
+                    e2.printStackTrace()
+                    System.exit(1)
+                    return
+                }
+            }
             System.err.println("❌ $name Worker Fatal Error: ${e.message}")
             e.printStackTrace()
             System.exit(1)
         }
+    }
+
+    /**
+     * 判断异常是否为 EACCES / bind 失败类（用于触发 UNIX socket 回退）。
+     */
+    private fun isEaccesOrBindFailure(e: Throwable): Boolean {
+        val msg = e.message.orEmpty()
+        return e is java.net.SocketException ||
+            msg.contains("EACCES", ignoreCase = true) ||
+            msg.contains("Permission denied", ignoreCase = true) ||
+            msg.contains("bind failed", ignoreCase = true)
     }
 
     private fun startTcpServer() {

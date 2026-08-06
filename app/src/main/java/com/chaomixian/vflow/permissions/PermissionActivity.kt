@@ -29,9 +29,13 @@ import com.google.android.material.appbar.AppBarLayout
 import com.google.android.material.button.MaterialButton
 import android.widget.Button
 import android.widget.TextView
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import rikka.shizuku.Shizuku
 import com.chaomixian.vflow.core.locale.toast
 import com.chaomixian.vflow.core.logging.DebugLogger
@@ -44,6 +48,12 @@ class PermissionActivity : BaseActivity() {
         const val EXTRA_PERMISSIONS = "permissions_list"
         const val EXTRA_WORKFLOW_NAME = "workflow_name"
         private const val TAG = "PermissionActivity"
+
+        // 独立于 Activity 生命周期的 scope：权限授予是短时操作，不应因 Activity
+        // 被系统销毁/重建（如授权触发 configurationChange）而中断。
+        // 之前用 lifecycleScope 导致 JobCancellationException，pm grant 命令
+        // 发出后还没等到结果协程就被取消了，权限永远授予不上。
+        private val grantScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     }
 
     private lateinit var requiredPermissions: ArrayList<Permission>
@@ -264,18 +274,20 @@ class PermissionActivity : BaseActivity() {
                 if (intent != null) {
                     appSettingsLauncher.launch(intent)
                 } else {
-                    lifecycleScope.launch {
-                        toast(R.string.permission_grant_all_started)
+                    grantScope.launch {
+                        withContext(Dispatchers.Main) { toast(R.string.permission_grant_all_started) }
                         val success = PermissionManager.autoGrantPermission(this@PermissionActivity, permission)
                         kotlinx.coroutines.delay(300)
-                        refreshPermissionsStatus()
-                        toast(
-                            if (success) {
-                                getString(R.string.permission_grant_all_success, 1)
-                            } else {
-                                getString(R.string.permission_grant_all_failed, 1)
-                            }
-                        )
+                        withContext(Dispatchers.Main) {
+                            refreshPermissionsStatus()
+                            toast(
+                                if (success) {
+                                    getString(R.string.permission_grant_all_success, 1)
+                                } else {
+                                    getString(R.string.permission_grant_all_failed, 1)
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -295,23 +307,26 @@ class PermissionActivity : BaseActivity() {
     /**
      * 一键授予所有权限
      * 使用 adb 命令通过 Shizuku 或 Root 授予所有可自动授予的权限
+     *
+     * 使用 grantScope 而非 lifecycleScope：权限授予过程中可能触发系统
+     * configurationChange（如 OVERLAY 权限变更），导致 Activity 被销毁重建。
+     * lifecycleScope 会被取消，pm grant 命令发出后还没等到结果就中断了。
      */
     private fun grantAllPermissions() {
-        lifecycleScope.launch {
+        grantScope.launch {
             try {
                 // 检查是否有可用的 Shell 方式
                 val canUseShell = ShellManager.isShizukuActive(this@PermissionActivity) ||
                                  ShellManager.isRootAvailable()
                 if (!canUseShell) {
-                    toast(R.string.permission_grant_all_no_shell)
+                    withContext(Dispatchers.Main) { toast(R.string.permission_grant_all_no_shell) }
                     return@launch
                 }
 
-                toast(R.string.permission_grant_all_started)
+                withContext(Dispatchers.Main) { toast(R.string.permission_grant_all_started) }
 
                 var grantedCount = 0
                 var failedCount = 0
-                val totalCount = requiredPermissions.size
 
                 // 遍历所有权限并尝试授予
                 for (permission in requiredPermissions) {
@@ -330,26 +345,24 @@ class PermissionActivity : BaseActivity() {
 
                 // 延迟一下再刷新状态
                 kotlinx.coroutines.delay(500)
-                refreshPermissionsStatus()
+                withContext(Dispatchers.Main) { refreshPermissionsStatus() }
 
                 // 显示结果
-                when {
-                    grantedCount > 0 && failedCount == 0 -> {
-                        toast(getString(R.string.permission_grant_all_success, grantedCount))
-                    }
-                    grantedCount > 0 && failedCount > 0 -> {
-                        toast(getString(R.string.permission_grant_all_partial, grantedCount, failedCount))
-                    }
-                    failedCount > 0 && grantedCount == 0 -> {
-                        toast(getString(R.string.permission_grant_all_failed, failedCount))
-                    }
-                    else -> {
-                        toast(R.string.permission_grant_all_already_granted)
-                    }
+                val msgRes = when {
+                    grantedCount > 0 && failedCount == 0 ->
+                        getString(R.string.permission_grant_all_success, grantedCount)
+                    grantedCount > 0 && failedCount > 0 ->
+                        getString(R.string.permission_grant_all_partial, grantedCount, failedCount)
+                    failedCount > 0 && grantedCount == 0 ->
+                        getString(R.string.permission_grant_all_failed, failedCount)
+                    else -> getString(R.string.permission_grant_all_already_granted)
                 }
+                withContext(Dispatchers.Main) { toast(msgRes) }
             } catch (e: Exception) {
                 DebugLogger.e(TAG, "一键授权出错", e)
-                toast(getString(R.string.permission_grant_all_error, e.message ?: "未知错误"))
+                withContext(Dispatchers.Main) {
+                    toast(getString(R.string.permission_grant_all_error, e.message ?: "未知错误"))
+                }
             }
         }
     }

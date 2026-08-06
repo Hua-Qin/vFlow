@@ -19,6 +19,7 @@ import kotlinx.coroutines.sync.withLock
 import rikka.shizuku.Shizuku
 import java.io.DataOutputStream
 import java.io.File
+import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -30,9 +31,12 @@ import kotlin.coroutines.resumeWithException
 object ShellManager {
     private const val TAG = "vFlowShellManager"
     // MIUI/EMUI 等受限 ROM 首次绑定 Shizuku UserService 时需拉起 :vflow_shizuku 进程，
-    // 3s 远不够（实测常需 5-10s），导致 onServiceConnected 在 3s 内未回调而超时失败。放宽到 15s。
-    private const val BIND_TIMEOUT_MS = 15000L
-    private const val MAX_RETRY_COUNT = 3
+    // Shizuku UserService 绑定超时。8s 足够健康设备拉起 UserService 进程；
+    // 若 8s 内 onServiceConnected 未回调，说明 Shizuku server 侧有问题（UserService
+    // 进程无法 spawn），重试也不会成功，故配合 MAX_RETRY_COUNT=1 仅试一次。
+    // 之前 15s × 3 = 45s，导致权限授予和 Core 启动卡死近一分钟才回退到 Root。
+    private const val BIND_TIMEOUT_MS = 8000L
+    private const val MAX_RETRY_COUNT = 1
     private const val DEPLOY_SUCCESS_MARKER = "__VFLOW_DEPLOY_OK__"
     private val ROOT_SHELL_COMMANDS = arrayOf("su", "-mm", "-c", "sh")
     private val ROOT_SHELL_FALLBACK_COMMANDS = arrayOf("su", "-c", "sh")
@@ -111,9 +115,20 @@ object ShellManager {
         // 启动一个后台协程来执行连接，不阻塞主线程
         scope.launch {
             if (isShizukuActive(context)) {
-                // 调用 getService 来触发带重试的连接逻辑
-                getService(context)
-                DebugLogger.d(TAG, "Shizuku 预连接尝试完成。")
+                // 预连接只是优化：实际命令执行时 getService 会再做完整重试。
+                // 这里只试 1 次（withTimeout 15s），失败也不重试——
+                // 之前 3 次重试 × 15s = 45s 纯浪费，且占用 connectionMutex
+                // 阻塞了真正需要执行命令的 getService 调用。
+                try {
+                    shellService = withTimeoutOrNull(BIND_TIMEOUT_MS) { connect(context) }
+                    if (shellService != null) {
+                        DebugLogger.d(TAG, "Shizuku 预连接成功。")
+                    } else {
+                        DebugLogger.d(TAG, "Shizuku 预连接未成功（1次尝试），跳过；实际命令执行时会重试。")
+                    }
+                } catch (e: Exception) {
+                    DebugLogger.d(TAG, "Shizuku 预连接异常(1次尝试): ${e.message}；实际命令执行时会重试。")
+                }
             } else {
                 DebugLogger.d(TAG, "Shizuku 未激活，跳过预连接。")
             }
@@ -189,10 +204,14 @@ object ShellManager {
         }
     }
 
-    // isRootAvailable 结果缓存：避免在短时间内多次触发 su 弹窗或 PermissionDenied
+    // isRootAvailable 结果缓存：避免在短时间内多次触发 su 弹窗或 PermissionDenied。
+    // MIUI 等 ROM 上 su 弹窗有时限，5s 内未点击会被判失败，导致短时间内的重复调用返回假阴性。
+    // 缓存 60s：一旦确认 Root 可用，1 分钟内都视为可用，避免 CoreLauncher/权限授予等关键
+    // 路径因 su 弹窗时限而错误地跳过 Root 回退（结果 Shizuku UserService 绑定又超时，
+    // 导致 Core 启动命令完全无法执行）。
     @Volatile
     private var cachedRootAvailable: Pair<Boolean, Long>? = null
-    private const val ROOT_CACHE_MS = 10_000L
+    private const val ROOT_CACHE_MS = 60_000L
     private const val ROOT_CHECK_TIMEOUT_MS = 5_000L
 
     /**
@@ -365,12 +384,49 @@ object ShellManager {
             }
 
             // 根据模式分发执行
-            when (finalMode) {
+            val result = when (finalMode) {
                 ShellMode.ROOT -> executeRootCommand(command)
                 ShellMode.CORE -> executeCoreCommand(context, command, VFlowCoreBridge.ExecMode.SHELL)
                 ShellMode.CORE_ROOT -> executeCoreCommand(context, command, VFlowCoreBridge.ExecMode.ROOT)
                 else -> executeShizukuCommand(context, command)
             }
+
+            // 弹性回退：Shizuku 执行失败时（服务绑定超时/连接断开），自动尝试 Core / Root。
+            // 这解决了「Shizuku UserService 绑定 3×15s 超时导致 pm grant 等关键命令
+            // 全部失败、权限永远授予不上」的问题。Core 已在 ROOT 模式运行时尤其有效。
+            if (!result.success && finalMode == ShellMode.SHIZUKU) {
+                DebugLogger.w(TAG, "Shizuku 执行失败(output=${result.output.take(80)}), 尝试回退到 Core/Root...")
+                // 优先用 Core（如果已连接，延迟最低）
+                if (VFlowCoreBridge.isConnected) {
+                    val coreResult = executeCoreCommand(context, command, VFlowCoreBridge.ExecMode.SHELL)
+                    if (coreResult.success) {
+                        DebugLogger.d(TAG, "回退到 Core(SHELL) 执行成功")
+                        return@withContext coreResult
+                    }
+                    // Core SHELL 失败，如果 Core 是 ROOT 模式，再试 ROOT
+                    if (VFlowCoreBridge.privilegeMode == VFlowCoreBridge.PrivilegeMode.ROOT) {
+                        val coreRootResult = executeCoreCommand(context, command, VFlowCoreBridge.ExecMode.ROOT)
+                        if (coreRootResult.success) {
+                            DebugLogger.d(TAG, "回退到 Core(ROOT) 执行成功")
+                            return@withContext coreRootResult
+                        }
+                    }
+                }
+                // Core 不可用或也失败了，最后试 Root。
+                // 关键：即使 isRootAvailable() 返回 false 也尝试一次——MIUI 上 su 弹窗有时限，
+                // isRootAvailable() 可能因弹窗未及时点击而返回假阴性（缓存过期后）。
+                // executeRootCommand 在 su 真正不可用时会快速 IOException 失败，不会长时间阻塞。
+                // 这解决了「Shizuku UserService 绑定超时 + isRootAvailable() 假阴性」双重失败
+                // 导致权限授予/Core 启动等关键命令完全无法执行的问题。
+                val rootResult = executeRootCommand(command)
+                if (rootResult.success) {
+                    DebugLogger.d(TAG, "回退到 Root 执行成功（isRootAvailable()=${isRootAvailable()}）")
+                    return@withContext rootResult
+                }
+                DebugLogger.w(TAG, "所有回退方式均失败，返回原始 Shizuku 错误")
+            }
+
+            result
         }
     }
 
@@ -534,9 +590,32 @@ object ShellManager {
     }
 
     /**
-     * 内部 Shizuku 执行逻辑 (保留原有逻辑)
+     * 内部 Shizuku 执行逻辑。
+     *
+     * 优先使用 Shizuku.newProcess()（在 Shizuku server 已有进程内 fork 执行命令），
+     * 失败再回退到 UserService（bindUserService）路径。
+     *
+     * 为什么要优先 newProcess：
+     * - UserService 绑定需要 Shizuku server 拉起 `:vflow_shizuku` 子进程；在 MIUI/EMUI
+     *   等受限 ROM 上经常 spawn 失败，表现为 onServiceConnected 永不回调，8s 超时后
+     *   所有 Shizuku 命令全部失败（权限授予、Core 启动等关键路径全部瘫痪）。
+     * - newProcess 直接在 Shizuku server 已运行的进程内 fork+exec，不依赖拉起新进程，
+     *   不存在绑定超时问题，且延迟更低（省去 IPC binder 往返）。
+     * - 需要 Shizuku API v11+（当前依赖 13.1.5，满足）。
+     *
+     * UserService 路径仍保留，用于：
+     * - newProcess 不可用（旧版 Shizuku）或权限被拒时的回退
+     * - 虚拟屏幕、守护任务等仍需长连接的功能（这些不走 executeShizukuCommand）
      */
     private suspend fun executeShizukuCommand(context: Context, command: String): ShellCommandResult {
+        // 1. 优先 newProcess
+        val newProcessResult = executeShizukuNewProcess(command)
+        if (newProcessResult != null) {
+            return newProcessResult
+        }
+
+        // 2. 回退到 UserService
+        DebugLogger.d(TAG, "newProcess 不可用或失败，回退到 UserService 执行")
         val service = getService(context)
         if (service == null) {
             val status = if (!isShizukuActive(context)) "Shizuku 未激活或未授权" else "服务连接失败"
@@ -570,6 +649,141 @@ object ShellManager {
     }
 
     /**
+     * 使用 Shizuku.newProcess() 在 Shizuku server 进程内直接执行 shell 命令。
+     *
+     * 优势：
+     * - 不需要绑定 UserService（避免 MIUI/EMUI 上 `:vflow_shizuku` 进程无法 spawn
+     *   导致的 8s 绑定超时）
+     * - 命令直接在已运行的 Shizuku server 进程内 fork 执行，延迟低
+     *
+     * 实现细节：
+     * - Shizuku API 13.1.5 中 `Shizuku.newProcess()` 是 private static 方法，
+     *   返回 `ShizukuRemoteProcess`（继承自 `java.lang.Process`）。
+     *   通过反射调用 newProcess，结果转型为 Process 即可使用标准 Process API。
+     * - ShizukuRemoteProcess 未实现 `waitFor(long, TimeUnit)`，使用
+     *   `withTimeoutOrNull { process.waitFor() }` + 超时后 `destroy()` 替代。
+     *
+     * @param command 要执行的命令（支持管道、重定向、后台 & 等复杂 shell 语法）
+     * @return 执行结果；null 表示 newProcess 路径不可用，需回退到 UserService
+     */
+    private suspend fun executeShizukuNewProcess(command: String): ShellCommandResult? {
+        // 快速检查 Shizuku 是否可用（不阻塞、不弹窗、不绑定服务）
+        val ready = try {
+            Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
+        } catch (e: Throwable) {
+            DebugLogger.d(TAG, "newProcess: Shizuku 不可用 (${e.javaClass.simpleName}: ${e.message})")
+            return null
+        }
+        if (!ready) {
+            DebugLogger.d(TAG, "newProcess: Shizuku 未激活或未授权，跳过 newProcess 路径")
+            return null
+        }
+
+        return try {
+            DebugLogger.d(TAG, "newProcess: 执行命令: $command")
+
+            // Shizuku.newProcess 是 private static，通过反射调用。
+            // ShizukuRemoteProcess extends java.lang.Process，可安全转型为 Process。
+            val shizukuClass = Class.forName("rikka.shizuku.Shizuku")
+            val newProcessMethod = shizukuClass.getDeclaredMethod(
+                "newProcess",
+                Array<String>::class.java,
+                Array<String>::class.java,
+                String::class.java
+            )
+            newProcessMethod.isAccessible = true
+            val rawProcess = newProcessMethod.invoke(
+                null,
+                arrayOf("sh", "-c", command),
+                null,
+                null
+            ) ?: return null
+            val process = rawProcess as Process
+
+            // 判断是否为后台启动类命令（Core 启动脚本以 `&` 结尾或含 nohup）
+            // 这类命令的外层 sh 会很快退出（后台子进程已 setsid 分离），给较短超时
+            val wantsDetach = command.trimEnd().endsWith('&') ||
+                command.contains("nohup ", ignoreCase = true)
+            val waitTimeoutMs = if (wantsDetach) 15_000L else 90_000L
+
+            // 并行读取 stdout/stderr，避免某一端缓冲写满导致子进程阻塞（死锁）
+            coroutineScope {
+                val stdoutDeferred = async(Dispatchers.IO) {
+                    try {
+                        process.inputStream.bufferedReader().use { it.readText() }
+                    } catch (e: Exception) {
+                        DebugLogger.d(TAG, "newProcess: 读取 stdout 异常: ${e.message}")
+                        ""
+                    }
+                }
+                val stderrDeferred = async(Dispatchers.IO) {
+                    try {
+                        process.errorStream.bufferedReader().use { it.readText() }
+                    } catch (e: Exception) {
+                        DebugLogger.d(TAG, "newProcess: 读取 stderr 异常: ${e.message}")
+                        ""
+                    }
+                }
+
+                // ShizukuRemoteProcess 未实现 waitFor(long, TimeUnit)，使用
+                // withTimeoutOrNull 包裹阻塞式 waitFor()；超时后 destroy() 让 waitFor 返回。
+                // 临时占用 IO 线程直到 destroy 生效（通常 < 10ms）。
+                val exitCode: Int? = withTimeoutOrNull(waitTimeoutMs) {
+                    process.waitFor()
+                }
+                if (exitCode == null) {
+                    DebugLogger.w(TAG, "newProcess 命令执行超时(${waitTimeoutMs}ms)，销毁子进程: $command")
+                    try { process.destroy() } catch (_: Exception) {}
+                    stdoutDeferred.cancel()
+                    stderrDeferred.cancel()
+                    return@coroutineScope ShellCommandResult(
+                        output = "Error: Command timed out",
+                        exitCode = -99,
+                        success = false
+                    )
+                }
+
+                val stdout = stdoutDeferred.await()
+                val stderr = stderrDeferred.await()
+
+                DebugLogger.d(
+                    TAG,
+                    "newProcess 执行完成: exitCode=$exitCode, " +
+                        "stdout长度=${stdout.length}, stderr长度=${stderr.length}"
+                )
+
+                if (exitCode == 0) {
+                    ShellCommandResult(
+                        output = if (stdout.isNotEmpty()) stdout.trim() else "Success",
+                        exitCode = exitCode,
+                        success = true
+                    )
+                } else {
+                    val msg = if (stderr.isNotBlank()) stderr
+                    else if (stdout.isNotBlank()) stdout
+                    else "Exit code $exitCode"
+                    ShellCommandResult(
+                        output = "Error: ${msg.trim()}",
+                        exitCode = exitCode,
+                        success = false
+                    )
+                }
+            }
+        } catch (e: SecurityException) {
+            DebugLogger.w(TAG, "newProcess: 权限被拒 (${e.message})")
+            null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            DebugLogger.w(
+                TAG,
+                "newProcess 执行失败: ${e.javaClass.simpleName}: ${e.message}"
+            )
+            null
+        }
+    }
+
+    /**
      * 开启无障碍服务。
      * 优先使用 WRITE_SECURE_SETTINGS 直接写入，失败后使用 AUTO Shell 模式。
      * @return 返回操作是否成功。
@@ -579,9 +793,12 @@ object ShellManager {
             return true
         }
 
+        // 权限相关命令优先用 Root（避免 Shizuku UserService 绑定 8s 超时）
+        val mode = if (isRootAvailable()) ShellMode.ROOT else ShellMode.AUTO
+
         val serviceName = AccessibilityServiceStatus.getServiceId(context)
         // 1. 读取当前已启用的服务列表
-        val currentServices = execShellCommand(context, "settings get secure enabled_accessibility_services")
+        val currentServices = execShellCommand(context, "settings get secure enabled_accessibility_services", mode)
         if (currentServices.startsWith("Error:")) {
             DebugLogger.e(TAG, "读取无障碍服务列表失败: $currentServices")
             return false
@@ -601,14 +818,14 @@ object ShellManager {
         }
 
         // 4. 写回新的服务列表
-        val result = execShellCommand(context, "settings put secure enabled_accessibility_services '$newServices'")
+        val result = execShellCommand(context, "settings put secure enabled_accessibility_services '$newServices'", mode)
         if (result.startsWith("Error:")) {
             DebugLogger.e(TAG, "写入无障碍服务列表失败: $result")
             return false
         }
 
         // 5. 确保无障碍总开关是打开的
-        execShellCommand(context, "settings put secure accessibility_enabled 1")
+        execShellCommand(context, "settings put secure accessibility_enabled 1", mode)
         DebugLogger.d(TAG, "已通过 Shell 尝试启用无障碍服务。")
         return true
     }
@@ -636,9 +853,12 @@ object ShellManager {
             return true
         }
 
+        // 权限相关命令优先用 Root（避免 Shizuku UserService 绑定 8s 超时）
+        val mode = if (isRootAvailable()) ShellMode.ROOT else ShellMode.AUTO
+
         val serviceName = AccessibilityServiceStatus.getServiceId(context)
         // 1. 读取当前服务列表
-        val currentServices = execShellCommand(context, "settings get secure enabled_accessibility_services")
+        val currentServices = execShellCommand(context, "settings get secure enabled_accessibility_services", mode)
         if (currentServices.startsWith("Error:") || currentServices == "null" || currentServices.isBlank()) {
             return true // 列表为空，无需操作
         }
@@ -653,7 +873,7 @@ object ShellManager {
 
         // 3. 写回新的服务列表
         val newServices = serviceList.joinToString(":")
-        val result = execShellCommand(context, "settings put secure enabled_accessibility_services '$newServices'")
+        val result = execShellCommand(context, "settings put secure enabled_accessibility_services '$newServices'", mode)
         if (result.startsWith("Error:")) {
             DebugLogger.e(TAG, "移除无障碍服务失败: $result")
             return false

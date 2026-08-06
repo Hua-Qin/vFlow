@@ -34,6 +34,25 @@ object PermissionManager {
 
     private fun isMainThread(): Boolean = Looper.myLooper() == Looper.getMainLooper()
 
+    /**
+     * 权限授予专用 Shell 命令执行器。
+     *
+     * 权限命令（pm grant / appops set / settings put）都是简单的一次性命令，
+     * Root 执行最可靠（无 UserService 绑定开销和超时风险）。
+     * 当 Root 可用时直接用 Root；否则用 AUTO（Shizuku → Core → Root 回退链）。
+     *
+     * 这解决了「Shizuku UserService 绑定 8s 超时导致 pm grant 卡住」的问题：
+     * 之前即使 Root 可用也会先试 Shizuku，白白等 8s。
+     */
+    private suspend fun execForPermission(context: Context, command: String): String {
+        val mode = if (ShellManager.isRootAvailable()) {
+            ShellManager.ShellMode.ROOT
+        } else {
+            ShellManager.ShellMode.AUTO
+        }
+        return ShellManager.execShellCommand(context, command, mode)
+    }
+
     // --- 权限定义 ---
     /**
      * vFlow Core 服务权限。
@@ -291,7 +310,7 @@ object PermissionManager {
                 try {
                     val packageName = context.packageName
                     val command = "appops set $packageName android:post_notifications allow"
-                    val result = ShellManager.execShellCommand(context, command)
+                    val result = execForPermission(context, command)
                     return !result.startsWith("Error")
                 } catch (e: Exception) {
                     DebugLogger.e(TAG, "自动授予通知权限失败", e)
@@ -333,7 +352,7 @@ object PermissionManager {
                 // Android 6.0+ 使用 appops 授予悬浮窗权限
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                     val command = "appops set $packageName android:system_alert_window allow"
-                    val result = ShellManager.execShellCommand(context, command)
+                    val result = execForPermission(context, command)
                     return !result.startsWith("Error")
                 }
             } catch (e: Exception) {
@@ -357,7 +376,7 @@ object PermissionManager {
                 // Android 6.0+ 使用 appops 授予修改设置权限
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                     val command = "appops set $packageName android:write_settings allow"
-                    val result = ShellManager.execShellCommand(context, command)
+                    val result = execForPermission(context, command)
                     return !result.startsWith("Error")
                 }
             } catch (e: Exception) {
@@ -379,7 +398,7 @@ object PermissionManager {
         override suspend fun autoGrant(context: Context): Boolean {
             return try {
                 val command = "pm grant ${context.packageName} ${Manifest.permission.WRITE_SECURE_SETTINGS}"
-                val result = ShellManager.execShellCommand(context, command)
+                val result = execForPermission(context, command)
                 !result.startsWith("Error")
             } catch (e: Exception) {
                 DebugLogger.e(TAG, "自动授予安全设置权限失败", e)
@@ -406,7 +425,7 @@ object PermissionManager {
                 // 使用 adb 命令添加电池优化白名单
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                     val command = "dumpsys deviceidle whitelist +$packageName"
-                    val result = ShellManager.execShellCommand(context, command)
+                    val result = execForPermission(context, command)
                     return !result.startsWith("Error")
                 }
             } catch (e: Exception) {
@@ -440,7 +459,7 @@ object PermissionManager {
                 // 添加到列表中
                 val newListeners = if (currentListeners.isEmpty()) serviceName else "$currentListeners:$serviceName"
                 val command = "settings put secure enabled_notification_listeners \"$newListeners\""
-                val result = ShellManager.execShellCommand(context, command)
+                val result = execForPermission(context, command)
                 return !result.startsWith("Error")
             } catch (e: Exception) {
                 DebugLogger.e(TAG, "自动授予通知使用权失败", e)
@@ -473,7 +492,7 @@ object PermissionManager {
                 // Android 12+ 使用 appops 授予精确闹钟权限
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     val command = "appops set $packageName android:schedule_exact_alarm allow"
-                    val result = ShellManager.execShellCommand(context, command)
+                    val result = execForPermission(context, command)
                     return !result.startsWith("Error")
                 }
             } catch (e: Exception) {
@@ -560,12 +579,12 @@ object PermissionManager {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                     // Android 11+ 使用 appops 授予所有文件访问权限
                     val command = "appops set $packageName android:manage_external_storage allow"
-                    val result = ShellManager.execShellCommand(context, command)
+                    val result = execForPermission(context, command)
                     !result.startsWith("Error")
                 } else {
                     // Android 10 及以下，授予存储权限
                     val command = "pm grant $packageName android.permission.WRITE_EXTERNAL_STORAGE"
-                    val result = ShellManager.execShellCommand(context, command)
+                    val result = execForPermission(context, command)
                     !result.startsWith("Error")
                 }
             } catch (e: Exception) {
@@ -595,7 +614,7 @@ object PermissionManager {
                 val packageName = context.packageName
                 // 使用 appops 授予使用情况访问权限
                 val command = "appops set $packageName android:get_usage_stats allow"
-                val result = ShellManager.execShellCommand(context, command)
+                val result = execForPermission(context, command)
                 !result.startsWith("Error")
             } catch (e: Exception) {
                 DebugLogger.e(TAG, "自动授予使用情况权限失败", e)
@@ -762,7 +781,7 @@ object PermissionManager {
 
             try {
                 val command = "pm grant $packageName $perm"
-                val result = ShellManager.execShellCommand(context, command)
+                val result = execForPermission(context, command)
                 if (result.startsWith("Error")) {
                     DebugLogger.w(TAG, "自动授予运行时权限失败: $perm")
                     allGranted = false

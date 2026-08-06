@@ -36,7 +36,7 @@ data class ChatUiState(
     val isAgentRunning: Boolean = false,
     val availableTools: List<ChatAgentToolDefinition> = emptyList(),
     val pendingPermissionRequest: ChatPermissionRequest? = null,
-    val autoApprovalScope: ChatToolAutoApprovalScope = ChatToolAutoApprovalScope.OFF,
+    val autoApprovalScope: ChatToolAutoApprovalScope = ChatToolAutoApprovalScope.STANDARD,
     val queuedPromptCount: Int = 0,
     val isBenchmarkRunning: Boolean = false,
     val benchmarkUi: ChatBenchmarkUiState = ChatBenchmarkUiState(),
@@ -184,6 +184,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun setAutoApprovalScope(scope: ChatToolAutoApprovalScope) {
         repository.setAutoApprovalScope(scope)
         _uiState.update { state -> state.copy(autoApprovalScope = scope) }
+    }
+
+    fun cycleAutoApprovalScope() {
+        val next = _uiState.value.autoApprovalScope.next()
+        setAutoApprovalScope(next)
     }
 
     fun refreshBenchmarkPreflight() {
@@ -360,6 +365,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val preset = resolvePreset(conversation, state)
         if (preset == null) {
             _events.tryEmit("请先在设置 -> 模型配置里配置聊天模型。")
+            return false
+        }
+        if (preset.providerEnum.requiresApiKey && preset.apiKey.isBlank()) {
+            _events.tryEmit("API Key 为空，请在设置 -> 模型配置中填写 ${preset.providerEnum.displayName} 的 API Key。")
             return false
         }
 

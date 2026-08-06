@@ -12,6 +12,7 @@
     <string name="title_settings">Settings</string>
     <string name="chat_placeholder_message">AI chat is coming soon.</string>
     <string name="chat_prompt_hint">Ask anything</string>
+    <string name="chat_agent_working">AI is working…</string>
     <string name="chat_more">More actions</string>
     <string name="chat_send">Send</string>
     <string name="chat_stop">Stop</string>
@@ -22,8 +23,8 @@
     <string name="chat_add_photos">Add %1$d photos</string>
     <string name="chat_web_search_title">Web search</string>
     <string name="chat_web_search_description">Find live news and information</string>
-    <string name="chat_auto_approve_title">Auto-approve scope</string>
-    <string name="chat_auto_approve_description">Automatically allow tool actions in this chat.</string>
+    <string name="chat_auto_approve_title">Auto-approve</string>
+    <string name="chat_auto_approve_description">Auto-approve AI tool actions without manual confirmation. Tap to cycle levels.</string>
     <string name="chat_auto_approve_scope_off">Off</string>
     <string name="chat_auto_approve_scope_read_only">Read only</string>
     <string name="chat_auto_approve_scope_low_risk">Low risk</string>
@@ -323,7 +324,7 @@
     <string name="home_core_status_stopped">Stopped</string>
     <string name="home_core_mode">Mode: %s</string>
     <string name="home_privilege_root">Root</string>
-    <string name="home_privilege_shell">Shell</string>
+    <string name="home_privilege_shell">Shizuku</string>
     <string name="home_privilege_none">No Privilege</string>
     <string name="home_total_workflows">Total Workflows</string>
     <string name="home_auto_tasks">Automated Tasks</string>
@@ -820,6 +821,10 @@
     <string name="ai_generation_stop_message">AI is generating. Do you want to interrupt it?</string>
     <string name="ai_generation_continue_waiting">Keep waiting</string>
     <string name="ai_generation_stop_and_close">Stop and close</string>
+    <string name="ai_generation_using_default_model">Using session default model: %1$s</string>
+    <string name="ai_generation_no_default_model">No default model found in session settings. Expand the config below to fill in manually</string>
+    <string name="ai_generation_model_loaded">Default model config loaded from session settings</string>
+    <string name="ai_generation_model_load_failed">Session default model not configured. Please fill in manually</string>
     <string name="hint_base_url">Base URL</string>
     <string name="hint_api_key">API Key</string>
     <string name="text_ready">Ready</string>
@@ -1289,6 +1294,9 @@
     <string name="onboarding_permissions_skip_message">If these required permissions are missing, some automation features may work incorrectly or not work at all. Do you still want to continue?</string>
     <string name="onboarding_permissions_skip_confirm">Continue anyway</string>
     <string name="onboarding_grant">Grant</string>
+    <string name="onboarding_permissions_grant_all">Grant all permissions at once</string>
+    <string name="onboarding_permissions_granting">Auto granting…</string>
+    <string name="onboarding_permissions_grant_hint">Active Shizuku or Root required for one-click grant</string>
 
     <string name="onboarding_completion_title">Ready to Launch!</string>
     <string name="onboarding_completion_desc">You have completed all basic configurations.\nWe have prepared a sample workflow for you,\nlet\'s experience automation now!</string>

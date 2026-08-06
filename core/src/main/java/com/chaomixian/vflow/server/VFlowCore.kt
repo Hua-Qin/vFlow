@@ -99,12 +99,11 @@ object VFlowCore {
             e.printStackTrace()
         }
 
-        val useUnixSocket = masterTransport == MasterTransport.UNIX
-        val resolvedUnixSocketName = if (useUnixSocket) {
-            unixSocketName ?: Config.getWorkerSocketName(resolveWorkerType(type), appPackageName)
-        } else {
-            null
-        }
+        // Worker 始终使用 UNIX 抽象 socket（与 masterTransport 解耦）。
+        // 原因见 buildWorkerTransportArgs 的注释：ShellWorker 降权后若仍在 untrusted_app 域，
+        // 绑定 TCP ServerSocket 会被 SELinux 拒绝（EACCES）。UNIX 抽象 socket 任何 uid/域都能 bind。
+        val useUnixSocket = true
+        val resolvedUnixSocketName = unixSocketName ?: Config.getWorkerSocketName(resolveWorkerType(type), appPackageName)
 
         when (type) {
             "shell" -> ShellWorker(useUnixSocket, resolvedUnixSocketName).run() // 逻辑已移入 ShellWorker
@@ -315,9 +314,10 @@ object VFlowCore {
     }
 
     private fun buildWorkerTransportArgs(type: Config.WorkerType): List<String> {
-        if (masterTransport != MasterTransport.UNIX) {
-            return emptyList()
-        }
+        // Worker 始终使用 UNIX 抽象命名空间 socket 与 Master 通信，与 App↔Master 的传输方式解耦。
+        // 原因：ShellWorker 降权到 uid=2000 后，若仍在 untrusted_app SELinux 域内
+        // （vflow_shell_exec 失败回退到直接 app_process 启动的场景），绑定 TCP ServerSocket
+        // 会被 SELinux 拒绝（EACCES）。UNIX 抽象 socket 不走 inet，任何 uid/域都能 bind。
         return listOf(
             "--ipc-transport",
             "unix",
@@ -336,28 +336,18 @@ object VFlowCore {
     }
 
     private fun routeRequestToWorker(workerType: Config.WorkerType, requestStr: String): String {
+        // Master↔Worker 始终走 UNIX 抽象 socket（见 buildWorkerTransportArgs 的注释）。
         return try {
-            if (masterTransport == MasterTransport.UNIX) {
-                val socketName = Config.getWorkerSocketName(workerType, appPackageName)
-                LocalSocket(LocalSocket.SOCKET_STREAM).use { ws ->
-                    ws.connect(
-                        LocalSocketAddress(socketName, LocalSocketAddress.Namespace.ABSTRACT)
-                    )
-                    ws.soTimeout = Config.SOCKET_TIMEOUT
-                    val writer = PrintWriter(OutputStreamWriter(ws.outputStream), true)
-                    val reader = BufferedReader(InputStreamReader(ws.inputStream))
-                    writer.println(requestStr)
-                    reader.readLine() ?: JSONObject().put("success", false).put("error", "Empty response").toString()
-                }
-            } else {
-                val port = Config.getWorkerPort(workerType)
-                Socket(Config.LOCALHOST, port).use { ws ->
-                    ws.soTimeout = Config.SOCKET_TIMEOUT
-                    val writer = PrintWriter(OutputStreamWriter(ws.getOutputStream()), true)
-                    val reader = BufferedReader(InputStreamReader(ws.inputStream))
-                    writer.println(requestStr)
-                    reader.readLine() ?: JSONObject().put("success", false).put("error", "Empty response").toString()
-                }
+            val socketName = Config.getWorkerSocketName(workerType, appPackageName)
+            LocalSocket(LocalSocket.SOCKET_STREAM).use { ws ->
+                ws.connect(
+                    LocalSocketAddress(socketName, LocalSocketAddress.Namespace.ABSTRACT)
+                )
+                ws.soTimeout = Config.SOCKET_TIMEOUT
+                val writer = PrintWriter(OutputStreamWriter(ws.outputStream), true)
+                val reader = BufferedReader(InputStreamReader(ws.inputStream))
+                writer.println(requestStr)
+                reader.readLine() ?: JSONObject().put("success", false).put("error", "Empty response").toString()
             }
         } catch (e: Exception) {
             JSONObject().put("success", false).put("error", "Worker error: ${e.message}").toString()
@@ -381,46 +371,26 @@ object VFlowCore {
         requestStr: String,
         clientWriter: PrintWriter
     ) {
+        // Master↔Worker 始终走 UNIX 抽象 socket（见 buildWorkerTransportArgs 的注释）。
         try {
-            if (masterTransport == MasterTransport.UNIX) {
-                val socketName = Config.getWorkerSocketName(workerType, appPackageName)
-                LocalSocket(LocalSocket.SOCKET_STREAM).use { workerSocket ->
-                    workerSocket.connect(
-                        LocalSocketAddress(socketName, LocalSocketAddress.Namespace.ABSTRACT)
-                    )
-                    workerSocket.soTimeout = Config.SOCKET_TIMEOUT
-                    val workerWriter = PrintWriter(OutputStreamWriter(workerSocket.outputStream), true)
-                    val workerReader = BufferedReader(InputStreamReader(workerSocket.inputStream))
-                    workerWriter.println(requestStr)
-                    if (workerWriter.checkError()) {
-                        clientWriter.println(JSONObject().put("success", false).put("error", "Failed to write stream request").toString())
-                        return
-                    }
-                    while (isRunning) {
-                        val line = workerReader.readLine() ?: break
-                        clientWriter.println(line)
-                        if (clientWriter.checkError()) {
-                            break
-                        }
-                    }
+            val socketName = Config.getWorkerSocketName(workerType, appPackageName)
+            LocalSocket(LocalSocket.SOCKET_STREAM).use { workerSocket ->
+                workerSocket.connect(
+                    LocalSocketAddress(socketName, LocalSocketAddress.Namespace.ABSTRACT)
+                )
+                workerSocket.soTimeout = Config.SOCKET_TIMEOUT
+                val workerWriter = PrintWriter(OutputStreamWriter(workerSocket.outputStream), true)
+                val workerReader = BufferedReader(InputStreamReader(workerSocket.inputStream))
+                workerWriter.println(requestStr)
+                if (workerWriter.checkError()) {
+                    clientWriter.println(JSONObject().put("success", false).put("error", "Failed to write stream request").toString())
+                    return
                 }
-            } else {
-                val port = Config.getWorkerPort(workerType)
-                Socket(Config.LOCALHOST, port).use { workerSocket ->
-                    workerSocket.soTimeout = Config.SOCKET_TIMEOUT
-                    val workerWriter = PrintWriter(OutputStreamWriter(workerSocket.getOutputStream()), true)
-                    val workerReader = BufferedReader(InputStreamReader(workerSocket.inputStream))
-                    workerWriter.println(requestStr)
-                    if (workerWriter.checkError()) {
-                        clientWriter.println(JSONObject().put("success", false).put("error", "Failed to write stream request").toString())
-                        return
-                    }
-                    while (isRunning) {
-                        val line = workerReader.readLine() ?: break
-                        clientWriter.println(line)
-                        if (clientWriter.checkError()) {
-                            break
-                        }
+                while (isRunning) {
+                    val line = workerReader.readLine() ?: break
+                    clientWriter.println(line)
+                    if (clientWriter.checkError()) {
+                        break
                     }
                 }
             }
@@ -566,29 +536,51 @@ object VFlowCore {
 
     /**
      * 重启 App 服务
+     *
+     * 注意：从 Shell/Root 进程直接 `am start-service` 在 Android 8+ 会被后台服务限制拦截，
+     * 报 "app is in background uid null"。这里改用三段式策略：
+     *  1. 先 `am start` 拉起 MainActivity（把 App 进程从无到有，并进入前台）；
+     *  2. 再 `am start-foreground-service` 启动 TriggerService（前台服务不受后台限制）；
+     *  3. 仍失败则只保留 1（App 进程已起来，App 内部可自行拉服务）。
+     * 同时附带 --user 0 避免 MIUI 多用户场景下找不到包。
      */
     private fun restartApp(packageName: String): Boolean {
+        val mainActivity = "$packageName.ui.main.MainActivity"
+        val serviceComponent = "$packageName/${packageName}.services.TriggerService"
+
+        // 步骤 1：拉起 MainActivity 让 App 进程进入前台
+        val startActivityCmd = "am start --user 0 -n $packageName/$mainActivity"
+        println(">>> App Watcher: Executing: $startActivityCmd <<<")
+        var step1Ok = execAmCommand(startActivityCmd)
+
+        // 步骤 2：尝试前台服务方式启动 TriggerService
+        val startFgServiceCmd = "am start-foreground-service --user 0 -n $serviceComponent"
+        println(">>> App Watcher: Executing: $startFgServiceCmd <<<")
+        val step2Ok = execAmCommand(startFgServiceCmd)
+
+        // 步骤 3：如果前台服务失败，尝试普通 start-service（部分 ROM/旧版本仍允许）
+        if (!step2Ok) {
+            val startServiceCmd = "am start-service --user 0 -n $serviceComponent"
+            println(">>> App Watcher: Executing: $startServiceCmd <<<")
+            execAmCommand(startServiceCmd)
+        }
+
+        // 只要 App 进程被拉起（步骤 1 成功），就认为重启成功——
+        // App 的 Application/MainActivity 内部会自行拉起 TriggerService。
+        return step1Ok
+    }
+
+    private fun execAmCommand(command: String): Boolean {
         return try {
-            // 使用 am start-service 命令重启 TriggerService
-            val serviceComponent = "$packageName/${packageName}.services.TriggerService"
-            val command = "am start-service -n $serviceComponent"
-
-            println(">>> App Watcher: Executing: $command <<<")
-
             val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", command))
             val exitCode = process.waitFor()
-
-            // 读取错误输出
             val error = process.errorStream.bufferedReader().use { it.readText().trim() }
             if (error.isNotEmpty()) {
                 System.err.println("App Watcher Error: $error")
             }
-
             exitCode == 0
-
         } catch (e: Exception) {
-            System.err.println("❌ App Watcher: Failed to restart app: ${e.message}")
-            e.printStackTrace()
+            System.err.println("❌ App Watcher: command failed [$command]: ${e.message}")
             false
         }
     }
