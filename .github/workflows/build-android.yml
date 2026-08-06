@@ -90,13 +90,12 @@ jobs:
           WRAPPER_PROPS_HASH=$(sha256sum gradle/wrapper/gradle-wrapper.properties | awk '{print $1}')
           echo "wrapper_props=$WRAPPER_PROPS_HASH" >> "$GITHUB_OUTPUT"
           BUILD_FILES_HASH=$( (
-              cat build.gradle.kts settings.gradle.kts gradle.properties 2>/dev/null
+              cat build.gradle.kts settings.gradle.kts gradle/libs.versions.toml gradle.properties 2>/dev/null
               find app core -maxdepth 2 -name 'build.gradle.kts' -print -exec cat {} \;
           ) | sha256sum | awk '{print $1}')
           echo "build_files=$BUILD_FILES_HASH" >> "$GITHUB_OUTPUT"
           NATIVE_HASH=$( (
-              find core/src/cpp -type f \( -name '*.cpp' -o -name '*.h' -o -name 'CMakeLists.txt' \) -print -exec cat {} \;
-              find app -maxdepth 3 -name 'CMakeLists.txt' -print -exec cat {} \;
+              find app/src/main/cpp -type f \( -name '*.cpp' -o -name '*.h' -o -name 'CMakeLists.txt' \) -print -exec cat {} \;
           ) 2>/dev/null | sha256sum | awk '{print $1}')
           echo "native=$NATIVE_HASH" >> "$GITHUB_OUTPUT"
           cat "$GITHUB_OUTPUT"
@@ -127,16 +126,13 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: wrapper
-          cache-encryption-key: ${{ secrets.GRADLE_CACHE_ENCRYPTION_KEY || '' }}
           gradle-home-cache-cleanup: true
 
-      # (5) CMake / Ninja outputs per module (~vflow_shell_exec native .so).
+      # (5) CMake / Ninja outputs for native code (vflow_shell_exec, ncnn, sherpa-ncnn .so).
       - name: Cache C++ native build outputs (.cxx)
         uses: actions/cache@v4
         with:
-          path: |
-            app/build/.cxx
-            core/build/.cxx
+          path: app/build/.cxx
           key: >-
             ${{ runner.os }}-cxx-arm64-v8a-${{
               steps.cache-keys.outputs.native }}-${{
@@ -145,9 +141,35 @@ jobs:
             ${{ runner.os }}-cxx-arm64-v8a-${{ steps.cache-keys.outputs.native }}-
             ${{ runner.os }}-cxx-arm64-v8a-
 
-      - name: Install dependencies & build arm64-v8a debug APK
+      - name: Make gradlew executable
         shell: bash
-        run: ./gradlew --stacktrace :app:assembleDebug -Pvflow.abi=arm64-v8a --build-cache --parallel --no-daemon
+        run: chmod +x ./gradlew
+
+      - name: Pre-resolve Gradle dependencies (offline-aware)
+        shell: bash
+        run: >
+          ./gradlew --no-daemon --build-cache --parallel
+          :app:dependencies --configuration debugCompileClasspath
+          2>&1 | tail -5 || true
+
+      - name: Build arm64-v8a debug APK
+        shell: bash
+        run: >
+          ./gradlew --stacktrace
+          :app:assembleDebug
+          -Pvflow.abi=arm64-v8a
+          --build-cache --parallel --no-daemon
+
+      - name: Verify APK output
+        shell: bash
+        run: |
+          set -e
+          echo "=== APK build outputs ==="
+          find app/build/outputs/apk -name "*.apk" -type f 2>/dev/null || true
+          echo "=== APK count ==="
+          find app/build/outputs/apk -name "*.apk" -type f 2>/dev/null | wc -l
+          echo "=== APK sizes ==="
+          find app/build/outputs/apk -name "*.apk" -type f -exec ls -lh {} \; 2>/dev/null || true
 
       - name: Upload Android APK artifact
         uses: actions/upload-artifact@v4
