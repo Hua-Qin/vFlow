@@ -1,18 +1,17 @@
 name: Android CI
 
 # Auto-adapted for Android (Kotlin + Gradle Kotlin DSL, multi-module :app/:core, native CMake).
-# Only builds the arm64-v8a debug APK to keep CI fast.
+# High-performance CI: only builds the arm64-v8a debug APK with maximal caching & parallelism.
 #
-# Caching strategy (heavily cached; keys derived from immutable lockfiles so stale caches
-# never poison correctness):
-#   1. JDK tarball + Gradle deps  : setup-java cache=gradle        (~100MB, hits on setup)
-#   2. Gradle wrapper dist        : actions/cache on wrapper/dists (~150MB gradle-X-bin.zip)
-#   3. Konan / Kotlin Native      : actions/cache on ~/.konan      (~300MB LLVM toolchains)
-#   4. Android SDK components     : actions/cache on ANDROID_HOME
-#        platforms / build-tools / ndk / cmake                     (hundreds of MB, AGP auto-fetches)
-#   5. Gradle build cache         : gradle/actions/setup-gradle@v4 (always; handles deps+gc)
-#   6. CMake / .cxx per-module    : actions/cache per build.gradle hash
+# Caching strategy (5 layers, keys derived from immutable lockfiles):
+#   1. JDK tarball                 : setup-java cache=gradle        (~100MB)
+#   2. Gradle wrapper dist         : actions/cache on wrapper/dists (~150MB gradle-X-bin.zip)
+#   3. Konan / Kotlin Native       : actions/cache on ~/.konan      (~300MB LLVM toolchains)
+#   4. Gradle build cache + deps   : gradle/actions/setup-gradle@v4 (always; handles deps+gc)
+#   5. CMake / .cxx per-module     : actions/cache per C++ source hash
 #                                   (avoids re-linking vflow_shell_exec when C++ untouched)
+# NOTE: Android SDK components are NOT cached because windows-latest image pre-installs them.
+#   Caching SDK paths that differ between image versions causes "SDK location not found" errors.
 
 on:
   push:
@@ -28,31 +27,65 @@ concurrency:
 jobs:
   build:
     name: Build Android APK (arm64-v8a)
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     permissions:
       contents: read
     env:
-      # Pin SDK root explicitly so cache paths and Gradle agree regardless of runner image.
-      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-      ANDROID_HOME: /usr/local/lib/android/sdk
+      GRADLE_OPTS: '-Dorg.gradle.daemon=false -Dorg.gradle.parallel=true -Dorg.gradle.caching=true'
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # 优先使用用户配置的 GH_PAT（更高 API 配额/跨仓库访问），
+          # 未配置时自动回退到 workflow 自带的 GITHUB_TOKEN。
+          token: ${{ secrets.GH_PAT || github.token }}
+          submodules: recursive
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-          # NOTE: we intentionally do NOT set `cache: gradle` here.
-          # gradle/actions/setup-gradle@v4 (below) owns the Gradle home cache and
-          # running both would double-save the same ~/.gradle tree, wasting quota.
-          # Setup-java still caches the Temurin tarball itself.
+
+      # Detect the actual Android SDK path on the runner image and write local.properties.
+      # This is critical on Windows where the path can change between image versions.
+      - name: Configure Android SDK path
+        shell: powershell
+        run: |
+          Write-Host "ANDROID_HOME=$env:ANDROID_HOME"
+          Write-Host "ANDROID_SDK_ROOT=$env:ANDROID_SDK_ROOT"
+
+          $sdkPath = $env:ANDROID_HOME
+          if (-not $sdkPath) { $sdkPath = $env:ANDROID_SDK_ROOT }
+          if (-not $sdkPath) { $sdkPath = "$env:LOCALAPPDATA\Android\Sdk" }
+
+          if (-not (Test-Path $sdkPath)) {
+            Write-Host "SDK not found at $sdkPath, searching..."
+            $candidates = @(
+              "$env:LOCALAPPDATA\Android\Sdk",
+              "C:\Users\runneradmin\AppData\Local\Android\Sdk",
+              "C:\Android\Sdk"
+            )
+            foreach ($c in $candidates) {
+              if (Test-Path $c) { $sdkPath = $c; break }
+            }
+          }
+
+          Write-Host "Using SDK path: $sdkPath"
+          if (-not (Test-Path $sdkPath)) {
+            throw "Android SDK not found anywhere!"
+          }
+
+          # Write local.properties with Java-style escaped backslashes
+          $escaped = $sdkPath -replace '\\', '\\'
+          "sdk.dir=$escaped" | Set-Content -Path local.properties -Encoding ascii
+          Write-Host "local.properties content:"
+          Get-Content local.properties
 
       # ---------------------------------------------------------------------
-      # Cache key hashes.  Kept as a separate step so we can dump them in the
-      # log and debug miss reasons without scrolling through Post Cache steps.
+      # Cache key hashes. Separate step so we can dump them in the log
+      # and debug miss reasons without scrolling through Post Cache steps.
       # ---------------------------------------------------------------------
       - name: Compute cache keys (diagnostic)
         id: cache-keys
@@ -62,23 +95,14 @@ jobs:
           WRAPPER_PROPS_HASH=$(sha256sum gradle/wrapper/gradle-wrapper.properties | awk '{print $1}')
           echo "wrapper_props=$WRAPPER_PROPS_HASH" >> "$GITHUB_OUTPUT"
           BUILD_FILES_HASH=$( (
-              cat build.gradle.kts settings.gradle.kts gradle.properties 2>/dev/null
+              cat build.gradle.kts settings.gradle.kts gradle/libs.versions.toml gradle.properties 2>/dev/null
               find app core -maxdepth 2 -name 'build.gradle.kts' -print -exec cat {} \;
           ) | sha256sum | awk '{print $1}')
           echo "build_files=$BUILD_FILES_HASH" >> "$GITHUB_OUTPUT"
           NATIVE_HASH=$( (
-              find core/src/cpp -type f \( -name '*.cpp' -o -name '*.h' -o -name 'CMakeLists.txt' \) -print -exec cat {} \;
-              find app -maxdepth 3 -name 'CMakeLists.txt' -print -exec cat {} \;
+              find app/src/main/cpp -type f \( -name '*.cpp' -o -name '*.h' -o -name 'CMakeLists.txt' \) -print -exec cat {} \;
           ) 2>/dev/null | sha256sum | awk '{print $1}')
           echo "native=$NATIVE_HASH" >> "$GITHUB_OUTPUT"
-          SDK_BOOTSTRAP_HASH=$( (
-              echo "AGP from root build.gradle.kts:"
-              grep -E 'com\.android\.tools\.build:gradle|agp' build.gradle.kts buildSrc/**/*.kt* 2>/dev/null || true
-              echo "SDK versions:"
-              grep -E 'compileSdk|targetSdk|minSdk|ndkVersion' \
-                app/build.gradle.kts core/build.gradle.kts 2>/dev/null || true
-          ) | sha256sum | awk '{print $1}')
-          echo "sdk_bootstrap=$SDK_BOOTSTRAP_HASH" >> "$GITHUB_OUTPUT"
           cat "$GITHUB_OUTPUT"
 
       # (2) Gradle wrapper dist (~150MB gradle-X-bin.zip).
@@ -102,45 +126,18 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-konan-
 
-      # (4) Android SDK components (platforms / build-tools / ndk / cmake).
-      - name: Cache Android SDK components
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${{ env.ANDROID_SDK_ROOT }}/platforms
-            ${{ env.ANDROID_SDK_ROOT }}/build-tools
-            ${{ env.ANDROID_SDK_ROOT }}/ndk
-            ${{ env.ANDROID_SDK_ROOT }}/cmake
-            ${{ env.ANDROID_SDK_ROOT }}/licenses
-          key: >-
-            ${{ runner.os }}-android-sdk-${{
-              steps.cache-keys.outputs.sdk_bootstrap }}
-          restore-keys: |
-            ${{ runner.os }}-android-sdk-
-
-      # (5) Gradle build cache + Gradle dependency cache.
-      #     setup-gradle is preferred over manual ~/.gradle cache because it:
-      #       * sizes caches correctly
-      #       * runs `--stop` at end
-      #       * does cache entries GC
-      #       * avoids double-caching (mutually exclusive with manual .gradle cache)
+      # (4) Gradle build cache + Gradle dependency cache.
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: wrapper
-          # Encryption key is OPTIONAL; only applied when the repo has the secret set.
-          # Without it, gradle-home cache falls back to action-default encryption (per-repo).
-          cache-encryption-key: ${{ secrets.GRADLE_CACHE_ENCRYPTION_KEY || '' }}
           gradle-home-cache-cleanup: true
 
-      # (6) CMake / Ninja outputs per module (~vflow_shell_exec native .so).
-      #     Keyed on C++ sources + CMakeLists so code changes invalidate cleanly.
+      # (5) CMake / Ninja outputs for native code (vflow_shell_exec, ncnn, sherpa-ncnn .so).
       - name: Cache C++ native build outputs (.cxx)
         uses: actions/cache@v4
         with:
-          path: |
-            app/build/.cxx
-            core/build/.cxx
+          path: app/build/.cxx
           key: >-
             ${{ runner.os }}-cxx-arm64-v8a-${{
               steps.cache-keys.outputs.native }}-${{
@@ -149,11 +146,35 @@ jobs:
             ${{ runner.os }}-cxx-arm64-v8a-${{ steps.cache-keys.outputs.native }}-
             ${{ runner.os }}-cxx-arm64-v8a-
 
-      - name: Install dependencies & build arm64-v8a debug APK
-        # --build-cache  : 显式启用 Gradle 构建缓存（配合 gradle.properties 的 org.gradle.caching=true）
-        # --parallel     : 多模块并行（配合 org.gradle.parallel=true，:app/:core 可并行配置）
-        # --no-daemon    : CI 环境禁用守护进程，避免与 setup-gradle 缓存生命周期冲突
-        run: ./gradlew --stacktrace --build-cache --parallel --no-daemon :app:assembleDebug -Pvflow.abi=arm64-v8a
+      - name: Make gradlew executable
+        shell: bash
+        run: chmod +x ./gradlew
+
+      - name: Pre-resolve Gradle dependencies (offline-aware)
+        shell: bash
+        run: >
+          ./gradlew --no-daemon --build-cache --parallel
+          :app:dependencies --configuration debugCompileClasspath
+          2>&1 | tail -5 || true
+
+      - name: Build arm64-v8a debug APK
+        shell: bash
+        run: >
+          ./gradlew --stacktrace
+          :app:assembleDebug
+          -Pvflow.abi=arm64-v8a
+          --build-cache --parallel --no-daemon
+
+      - name: Verify APK output
+        shell: bash
+        run: |
+          set -e
+          echo "=== APK build outputs ==="
+          find app/build/outputs/apk -name "*.apk" -type f 2>/dev/null || true
+          echo "=== APK count ==="
+          find app/build/outputs/apk -name "*.apk" -type f 2>/dev/null | wc -l
+          echo "=== APK sizes ==="
+          find app/build/outputs/apk -name "*.apk" -type f -exec ls -lh {} \; 2>/dev/null || true
 
       - name: Upload Android APK artifact
         uses: actions/upload-artifact@v4
@@ -162,3 +183,5 @@ jobs:
           path: app/build/outputs/apk/**/*.apk
           if-no-files-found: error
           retention-days: 14
+          # 最高压缩级别：用少量CPU时间换取更短的上传耗时和更小的存储占用。
+          compression-level: 9
